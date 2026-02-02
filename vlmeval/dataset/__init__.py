@@ -102,6 +102,24 @@ from .macbench import MaCBench
 from .sarena_mini import SArena_MINI
 from .uni_svg import UniSVG
 
+# Embodied Benchmarks
+from .embodied_benchmarks import (
+    CVBenchDataset,
+    EmbSpatialBenchDataset,
+    SATDataset,
+    MindCubeDataset,
+    BLINKDataset,
+    RefSpatialBenchDataset,
+    RoboSpatialPointingDataset,
+    RoboSpatialVQADataset,
+    Where2PlaceDataset,
+    VSIBenchDataset,
+    CosmosReason1Dataset,
+    MinimalVideosDataset,
+    OpenEQADataset,
+    ERQADataset,
+)
+
 
 class ConcatDataset(ImageBaseDataset):
     # This dataset takes multiple dataset names as input and aggregate them into a single dataset.
@@ -232,6 +250,10 @@ IMAGE_DATASET = [
     MedqbenchPairedDescriptionDataset, MedqbenchCaptionDataset, ChartMuseum, ChartQAPro, ReasonMap_Plus,
     olmOCRBench, OceanOCRBench, MATBench, VLRMBench, RefCOCODataset, SimpleVQA, HiPhODataset, MaCBench,
     UniSVG, SArena_MINI, MMSIVideoBench,
+    # Embodied Benchmarks (Image)
+    CVBenchDataset, EmbSpatialBenchDataset, SATDataset, MindCubeDataset,
+    BLINKDataset, RefSpatialBenchDataset, RoboSpatialPointingDataset,
+    RoboSpatialVQADataset, Where2PlaceDataset, ERQADataset,
 ]
 
 VIDEO_DATASET = [
@@ -243,8 +265,9 @@ VIDEO_DATASET = [
     QBench_Video, QBench_Video_MCQ, QBench_Video_VQA,
     Video_MMLU_CAP, Video_MMLU_QA,
     Video_Holmes, VCRBench, CGAVCounting,
-    EgoExoBench_MCQ, DREAM, VideoTT, VideoMMMU, VSIBench
-
+    EgoExoBench_MCQ, DREAM, VideoTT, VideoMMMU, VSIBench,
+    # Embodied Benchmarks (Video)
+    VSIBenchDataset, CosmosReason1Dataset, MinimalVideosDataset, OpenEQADataset,
 ]
 
 TEXT_DATASET = [

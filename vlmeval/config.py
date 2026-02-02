@@ -1751,6 +1751,12 @@ molmo_series = {
     "molmo-72B-0924": partial(molmo, model_path="allenai/Molmo-72B-0924"),
 }
 
+# Molmo2 models with vLLM support via mm_olmo
+molmo2_series = {
+    "Molmo2-4B": partial(Molmo2, model_path="allenai/Molmo2-4B", max_new_tokens=512),
+    "Molmo2-8B": partial(Molmo2, model_path="allenai/Molmo2-8B", max_new_tokens=512),
+}
+
 kosmos_series = {
     "Kosmos2": partial(Kosmos2, model_path="microsoft/kosmos-2-patch14-224")
 }
@@ -2000,18 +2006,18 @@ supported_VLM = {}
 
 model_groups = [
     ungrouped, o1_apis, api_models, xtuner_series, qwen_series, llava_series, granite_vision_series,
-    internvl_series, yivl_series, xcomposer_series, minigpt4_series, 
-    idefics_series, instructblip_series, deepseekvl_series, deepseekvl2_series, 
-    janus_series, minicpm_series, cogvlm_series, wemm_series, cambrian_series, 
+    internvl_series, yivl_series, xcomposer_series, minigpt4_series,
+    idefics_series, instructblip_series, deepseekvl_series, deepseekvl2_series,
+    janus_series, minicpm_series, cogvlm_series, wemm_series, cambrian_series,
     chameleon_series, video_models, ovis_series, vila_series, mantis_series,
     mmalaya_series, phi3_series, phi4_series, xgen_mm_series, qwen2vl_series,qwen3vl_series,
-    slime_series, eagle_series, moondream_series, llama_series, molmo_series,
+    slime_series, eagle_series, moondream_series, llama_series, molmo_series, molmo2_series,
     kosmos_series, points_series, nvlm_series, vintern_series, h2ovl_series,
     aria_series, smolvlm_series, sail_series, valley_series, vita_series,
     ross_series, emu_series, ola_series, ursa_series, gemma_series,
     long_vita_series, ristretto_series, kimi_series, aguvis_series, hawkvl_series,
-    flash_vl, kimi_vllm_series, oryx_series, treevgr_series, varco_vision_series, qtunevl_series, 
-    xvl_series, thyme_series, logics_series, cosmos_series, keye_series, qianfanvl_series, 
+    flash_vl, kimi_vllm_series, oryx_series, treevgr_series, varco_vision_series, qtunevl_series,
+    xvl_series, thyme_series, logics_series, cosmos_series, keye_series, qianfanvl_series,
     lfm2vl_series, rbdashmm_api_series_lmdeploy, interns1_series, insight_v_series
 ]
 

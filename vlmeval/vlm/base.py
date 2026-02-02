@@ -1,6 +1,7 @@
 from ..smp import *
 from ..dataset import img_root_map, DATASET_TYPE
 from abc import abstractmethod
+from PIL import Image
 
 
 class BaseModel:
@@ -88,6 +89,10 @@ class BaseModel:
         elif self.check_content(inputs) == 'listdict':
             for item in inputs:
                 assert 'type' in item and 'value' in item
+                # Handle PIL Image directly - skip parse_file
+                if isinstance(item['value'], Image.Image):
+                    assert item['type'] == 'image'
+                    continue
                 mime, s = parse_file(item['value'])
                 if mime is None:
                     assert item['type'] == 'text'

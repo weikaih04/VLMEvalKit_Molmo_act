@@ -84,6 +84,7 @@ from .pixtral import Pixtral
 from .llama_vision import llama_vision
 from .llama4 import llama4
 from .molmo import molmo
+from .molmo2 import Molmo2
 from .points import POINTS, POINTSV15
 from .nvlm import NVLM
 from .vintern_chat import VinternChat
