@@ -7,8 +7,13 @@ Usage:
     python run_full_eval.py --model Molmo2-4B --batch_size 8 --output results/
 """
 
-import argparse
+# Set vLLM environment variables BEFORE any imports
 import os
+os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
+os.environ['VLLM_USE_V1'] = '0'
+os.environ['VLLM_ENABLE_V1_MULTIPROCESSING'] = '0'  # Speed up multimodal request preprocessing
+
+import argparse
 import json
 import re
 import time
@@ -20,6 +25,7 @@ warnings.filterwarnings('ignore')
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 from tqdm import tqdm
 
 from vlmeval.dataset import build_dataset
@@ -41,20 +47,38 @@ ALL_BENCHMARKS = [
     'RefSpatial_Embodied',
     'RoboSpatial_Pointing',
     'RoboSpatial_VQA',
-    'MindCube_Embodied',
+    'MindCube_Tiny_Embodied',
     'Where2Place_Embodied',
-    # 'VSI_Bench_Embodied',  # Temporarily disabled
+    'vsibench_16frame',  # Native VLMEvalKit VSIBench with proper MRA evaluation
     'CosmosReason1_Embodied',
-    # 'ERQA_Embodied',  # Requires TensorFlow
+    'ERQA_Embodied',
+    'MMSI_Bench_Embodied',
+    'PointBench_Embodied',  # Point-Bench multimodal pointing benchmark
+]
+
+# VSIBench question type categories (from native VLMEvalKit)
+VSIBENCH_MCA_TYPES = [
+    "object_rel_direction_easy",
+    "object_rel_direction_medium",
+    "object_rel_direction_hard",
+    "object_rel_distance",
+    "route_planning",
+    "obj_appearance_order",
+]
+VSIBENCH_NA_TYPES = [
+    "object_abs_distance",
+    "object_counting",
+    "object_size_estimation",
+    "room_size_estimation",
 ]
 
 
 def get_eval_type(benchmark_name: str) -> str:
     """Determine evaluation type for a benchmark."""
-    if 'Pointing' in benchmark_name or 'RefSpatial' in benchmark_name or 'Where2Place' in benchmark_name:
+    if 'Pointing' in benchmark_name or 'RefSpatial' in benchmark_name or 'Where2Place' in benchmark_name or 'PointBench' in benchmark_name:
         return 'pointing'
-    elif 'VSI_Bench' in benchmark_name:
-        return 'counting'
+    elif 'vsibench' in benchmark_name.lower():
+        return 'vsibench'  # Native VSIBench with MRA evaluation
     elif 'RoboSpatial_VQA' in benchmark_name:
         return 'substring'
     else:
@@ -128,17 +152,103 @@ def evaluate_substring(pred: str, answer: str) -> bool:
     return normalize_text(answer) in normalize_text(pred)
 
 
-def evaluate_sample(pred: str, item: dict, eval_type: str) -> bool:
-    """Evaluate a single prediction."""
+def evaluate_vsibench_mca(pred: str, ans: str) -> float:
+    """Evaluate VSIBench MCQ question - exact letter match."""
+    pred = pred.strip()
+    ans = ans.strip()
+    if pred.lower() == ans.lower() or pred.lower().startswith(ans.lower() + "."):
+        return 1.0
+    return 0.0
+
+
+def evaluate_vsibench_mra(pred: str, ans: str) -> float:
+    """Evaluate VSIBench numerical answer using Mean Relative Accuracy.
+
+    MRA measures how close the prediction is across multiple thresholds.
+    Returns score from 0 to 2.
+    """
+    try:
+        # Extract number from prediction
+        pred_clean = pred.strip()
+        # Try to extract first number from text
+        num_match = re.search(r'[-+]?\d*\.?\d+', pred_clean)
+        if num_match:
+            pred_num = float(num_match.group())
+        else:
+            pred_num = float(pred_clean)
+
+        ans_num = float(ans)
+        if ans_num == 0:
+            return 1.0 if pred_num == 0 else 0.0
+
+        acc = 0
+        for i in range(20):
+            theta = 0.5 + i * 0.05
+            if abs(pred_num - ans_num) / abs(ans_num) < 1 - theta:
+                acc += 1
+        return acc / 10  # Returns 0-2
+    except (ValueError, ZeroDivisionError) as e:
+        return 0.0
+
+
+def evaluate_vsibench(pred: str, item: dict) -> float:
+    """Evaluate VSIBench sample using official evaluation logic.
+
+    Returns score (0-1 for MCA, 0-2 for NA questions).
+    """
+    answer = str(item.get('answer', ''))
+    q_type = str(item.get('type', ''))
+
+    if q_type in VSIBENCH_MCA_TYPES:
+        return evaluate_vsibench_mca(pred, answer)
+    elif q_type in VSIBENCH_NA_TYPES:
+        return evaluate_vsibench_mra(pred, answer)
+    else:
+        # Fallback: try MCA first, then MRA
+        if len(answer) == 1 and answer.upper() in 'ABCD':
+            return evaluate_vsibench_mca(pred, answer)
+        else:
+            return evaluate_vsibench_mra(pred, answer)
+
+
+def evaluate_sample(pred: str, item: dict, eval_type: str):
+    """Evaluate a single prediction.
+
+    Returns:
+        bool for most types, float (0-2) for vsibench
+    """
     if eval_type == 'pointing':
         mask = item.get('mask')
         image = item.get('image')
+
+        # Load mask from path if not provided as image
+        if mask is None:
+            mask_path = item.get('mask_path', '')
+            if mask_path and os.path.exists(mask_path):
+                try:
+                    mask = Image.open(mask_path)
+                except Exception:
+                    pass
+
+        # Get image dimensions
         if image is not None:
             width, height = image.width, image.height
         else:
-            width = item.get('image_width', 640)
-            height = item.get('image_height', 480)
+            image_path = item.get('image_path', '')
+            if image_path and os.path.exists(image_path):
+                try:
+                    with Image.open(image_path) as img:
+                        width, height = img.size
+                except Exception:
+                    width = item.get('image_width', 640)
+                    height = item.get('image_height', 480)
+            else:
+                width = item.get('image_width', 640)
+                height = item.get('image_height', 480)
+
         return evaluate_pointing(pred, mask, width, height)
+    elif eval_type == 'vsibench':
+        return evaluate_vsibench(pred, item)  # Returns float 0-2
     elif eval_type == 'counting':
         return evaluate_counting(pred, str(item.get('answer', '')))
     elif eval_type == 'substring':
@@ -169,40 +279,78 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
 
     if has_batch:
         # Prepare all prompts at once, let vLLM handle continuous batching
-        print("Preparing all prompts...")
-        all_items = []
-        all_prompts = []
+        print("Preparing all prompts (with ProcessPool)...")
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        from functools import partial
+        import os
 
-        for i in tqdm(range(total_samples), desc="Building prompts"):
+        # Build prompts in parallel using ThreadPool
+        # Video decoding in OpenCV/decord releases GIL, so more workers help
+        num_workers = min(128, os.cpu_count() or 32)
+
+        # We need to pass the dataset builder to workers
+        # Use indices and rebuild in worker
+        indices = list(range(total_samples))
+
+        all_items = [(i, ds.data.iloc[i]) for i in range(total_samples)]
+        all_prompts = [None] * total_samples
+
+        # Use ThreadPool with more workers for I/O-bound video loading
+        # Video decoding releases GIL in OpenCV/decord, so ThreadPool works
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def build_prompt_for_idx(idx):
             try:
-                item = ds.data.iloc[i]
-                prompt = ds.build_prompt(item)
-                all_items.append((i, item))
-                all_prompts.append(prompt)
+                item = ds.data.iloc[idx]
+                # Video benchmarks require video_llm parameter
+                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower():
+                    prompt = ds.build_prompt(item, video_llm=True)
+                else:
+                    prompt = ds.build_prompt(item)
+                return idx, prompt, None
             except Exception as e:
-                print(f"  Error preparing sample {i}: {e}")
-                all_items.append((i, None))
-                all_prompts.append(None)
+                return idx, None, str(e)
+
+        # Increase workers for video I/O
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(build_prompt_for_idx, i) for i in range(total_samples)]
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Building prompts"):
+                idx, prompt, error = future.result()
+                if error:
+                    print(f"  Error preparing sample {idx}: {error}")
+                all_prompts[idx] = prompt
+
+        all_items = [(i, ds.data.iloc[i]) for i in range(total_samples)]
 
         # Filter valid prompts
         valid_indices = [j for j, p in enumerate(all_prompts) if p is not None]
         valid_prompts = [all_prompts[j] for j in valid_indices]
 
-        # Generate all at once - vLLM will use continuous batching internally
-        print(f"Running inference on {len(valid_prompts)} samples with continuous batching...")
-        try:
-            preds = model.generate_batch(valid_prompts, dataset=benchmark_name)
-        except Exception as e:
-            print(f"  Batch generation error: {e}")
-            preds = [''] * len(valid_prompts)
+        # Generate in chunks for progress tracking and error recovery
+        # With VLLM_ENABLE_V1_MULTIPROCESSING=0, larger chunks are fine
+        chunk_size = len(valid_prompts)  # Process all at once; vLLM handles batching internally
+        print(f"Running inference on {len(valid_prompts)} samples...")
+
+        preds = []
+        for chunk_start in tqdm(range(0, len(valid_prompts), chunk_size), desc="Inference chunks"):
+            chunk_end = min(chunk_start + chunk_size, len(valid_prompts))
+            chunk_prompts = valid_prompts[chunk_start:chunk_end]
+
+            try:
+                chunk_preds = model.generate_batch(chunk_prompts, dataset=benchmark_name)
+                preds.extend(chunk_preds)
+            except Exception as e:
+                print(f"  Chunk {chunk_start}-{chunk_end} error: {e}")
+                preds.extend([''] * len(chunk_prompts))
 
         # Map predictions back
         pred_map = {valid_indices[j]: preds[j] for j in range(len(preds))}
 
         # Evaluate
         results = []
-        correct = 0
+        score_sum = 0  # Use score_sum for VSIBench (0-2 per sample), correct count for others
         total = 0
+        is_vsibench = (eval_type == 'vsibench')
 
         for j, (i, item) in enumerate(all_items):
             if item is None:
@@ -210,7 +358,7 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
                     'index': i,
                     'prediction': '',
                     'answer': '',
-                    'correct': False,
+                    'score': 0,
                     'error': 'Failed to prepare sample',
                 })
                 total += 1
@@ -219,44 +367,55 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
             pred = pred_map.get(j, '')
 
             try:
-                is_correct = evaluate_sample(pred, item, eval_type)
+                result = evaluate_sample(pred, item, eval_type)
+                if is_vsibench:
+                    score = float(result)  # 0-2 for vsibench
+                else:
+                    score = 1.0 if result else 0.0
             except Exception as e:
-                is_correct = False
+                score = 0.0
 
-            if is_correct:
-                correct += 1
+            score_sum += score
             total += 1
 
             results.append({
                 'index': i,
                 'prediction': pred,
                 'answer': str(item.get('answer', '')),
-                'correct': is_correct,
+                'score': score,
             })
     else:
         # Sequential processing (fallback for non-vLLM)
         results = []
-        correct = 0
+        score_sum = 0
         total = 0
+        is_vsibench = (eval_type == 'vsibench')
 
         for i in tqdm(range(total_samples), desc=f"Processing {benchmark_name}"):
             try:
                 item = ds.data.iloc[i]
-                prompt = ds.build_prompt(item)
+                # Video benchmarks require video_llm parameter
+                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower():
+                    prompt = ds.build_prompt(item, video_llm=True)
+                else:
+                    prompt = ds.build_prompt(item)
 
                 pred = model.generate(message=prompt, dataset=benchmark_name)
 
-                is_correct = evaluate_sample(pred, item, eval_type)
+                result = evaluate_sample(pred, item, eval_type)
+                if is_vsibench:
+                    score = float(result)
+                else:
+                    score = 1.0 if result else 0.0
 
-                if is_correct:
-                    correct += 1
+                score_sum += score
                 total += 1
 
                 results.append({
                     'index': i,
                     'prediction': pred,
                     'answer': str(item.get('answer', '')),
-                    'correct': is_correct,
+                    'score': score,
                 })
 
             except Exception as e:
@@ -265,13 +424,23 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
                     'index': i,
                     'prediction': '',
                     'answer': '',
-                    'correct': False,
+                    'score': 0.0,
                     'error': str(e),
                 })
                 total += 1
 
-    accuracy = correct / total * 100 if total > 0 else 0
-    print(f"\nAccuracy: {correct}/{total} = {accuracy:.2f}%")
+    # Calculate accuracy/score
+    # For VSIBench: average score (MCA: 0-1, NA: 0-2, so max avg ~1.5)
+    # For others: percentage correct
+    if eval_type == 'vsibench':
+        # VSIBench uses MRA which gives 0-2 score for NA questions
+        # Report as average score
+        avg_score = score_sum / total if total > 0 else 0
+        print(f"\nVSIBench Avg Score: {avg_score:.4f} (total samples: {total})")
+        accuracy = avg_score * 100  # Scale for consistency with other benchmarks
+    else:
+        accuracy = score_sum / total * 100 if total > 0 else 0
+        print(f"\nAccuracy: {score_sum:.0f}/{total} = {accuracy:.2f}%")
 
     # Save results
     if output_dir:
@@ -286,7 +455,7 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
 
     return {
         'benchmark': benchmark_name,
-        'correct': correct,
+        'score_sum': score_sum,
         'total': total,
         'accuracy': accuracy,
     }
@@ -295,7 +464,7 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
 def main():
     parser = argparse.ArgumentParser(description='Run full evaluation on embodied benchmarks')
     parser.add_argument('--model', type=str, default='Molmo2-4B',
-                        choices=['Molmo2-4B', 'Molmo2-8B'],
+                        choices=['Molmo2-4B', 'Molmo2-8B', 'molmo2-4-spatial-tuning-v1-1k', 'molmo2-4-spatial-tuning-v1-4k'],
                         help='Model to evaluate')
     parser.add_argument('--benchmarks', nargs='+', default=None,
                         help='Specific benchmarks to run (default: all)')
@@ -314,7 +483,13 @@ def main():
 
     # Initialize model
     print(f"Initializing {args.model} with vLLM...")
-    model_path = f"allenai/{args.model}"
+    # Handle local checkpoints vs HuggingFace models
+    if args.model == 'molmo2-4-spatial-tuning-v1-1k':
+        model_path = "/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint"
+    elif args.model == 'molmo2-4-spatial-tuning-v1-4k':
+        model_path = "/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint_4k"
+    else:
+        model_path = f"allenai/{args.model}"
     model = Molmo2(model_path=model_path, use_vllm=True, max_new_tokens=args.max_new_tokens)
     print("Model initialized!")
 
@@ -337,20 +512,21 @@ def main():
     print("\n" + "="*60)
     print("FINAL SUMMARY")
     print("="*60)
-    print(f"{'Benchmark':<30} {'Accuracy':>20}")
+    print(f"{'Benchmark':<30} {'Score/Accuracy':>20}")
     print("-"*50)
 
-    total_correct = 0
+    total_score = 0
     total_samples = 0
 
     for r in all_results:
-        print(f"{r['benchmark']:<30} {r['correct']:>5}/{r['total']:<5} = {r['accuracy']:>6.2f}%")
-        total_correct += r['correct']
+        score = r.get('score_sum', r.get('correct', 0))  # Backwards compatible
+        print(f"{r['benchmark']:<30} {score:>5.1f}/{r['total']:<5} = {r['accuracy']:>6.2f}%")
+        total_score += score
         total_samples += r['total']
 
-    overall = total_correct / total_samples * 100 if total_samples > 0 else 0
+    overall = total_score / total_samples * 100 if total_samples > 0 else 0
     print("-"*50)
-    print(f"{'Overall':<30} {total_correct:>5}/{total_samples:<5} = {overall:>6.2f}%")
+    print(f"{'Overall':<30} {total_score:>5.1f}/{total_samples:<5} = {overall:>6.2f}%")
     print(f"\nTotal time: {elapsed_time/60:.1f} minutes")
 
     # Save summary
@@ -359,7 +535,7 @@ def main():
         'timestamp': timestamp,
         'results': all_results,
         'overall_accuracy': overall,
-        'total_correct': total_correct,
+        'total_score': total_score,
         'total_samples': total_samples,
         'elapsed_time_seconds': elapsed_time,
     }

@@ -101,25 +101,27 @@ class Molmo2(BaseModel):
             # in worker processes. Force tp=1 for now, continuous batching still provides speedup.
             tensor_parallel_size = self.kwargs.get('tensor_parallel_size', 1)
             gpu_memory_utilization = self.kwargs.get('gpu_memory_utilization', 0.9)
-            max_model_len = self.kwargs.get('max_model_len', 32768)
+            max_model_len = self.kwargs.get('max_model_len', None)  # Auto-detect from model config
             max_images = self.kwargs.get('max_images_per_prompt', 16)
 
             max_num_seqs = self.kwargs.get('max_num_seqs', 128)  # 并发序列数
 
             # Disable caching to avoid "Expected a cached item for mm_hash" errors
             # See: https://github.com/vllm-project/vllm/issues/11371
-            self.llm = LLM(
-                model=self.model_path,
-                tensor_parallel_size=tensor_parallel_size,
-                gpu_memory_utilization=gpu_memory_utilization,
-                trust_remote_code=True,
-                max_model_len=max_model_len,
-                max_num_seqs=max_num_seqs,
-                limit_mm_per_prompt={"image": max_images, "video": 1},
-                enable_prefix_caching=False,
-                mm_processor_cache_gb=0,  # Disable mm processor cache
-                disable_mm_preprocessor_cache=True,  # Explicitly disable
-            )
+            llm_kwargs = {
+                'model': self.model_path,
+                'tensor_parallel_size': tensor_parallel_size,
+                'gpu_memory_utilization': gpu_memory_utilization,
+                'trust_remote_code': True,
+                'max_num_seqs': max_num_seqs,
+                'limit_mm_per_prompt': {"image": max_images, "video": 1},
+                'enable_prefix_caching': False,
+                'mm_processor_cache_gb': 0,  # Disable mm processor cache
+                'disable_mm_preprocessor_cache': True,  # Explicitly disable
+            }
+            if max_model_len is not None:
+                llm_kwargs['max_model_len'] = max_model_len
+            self.llm = LLM(**llm_kwargs)
 
             self.sampling_params_class = SamplingParams
             print(f"Molmo2 vLLM initialized: {self.model_path}")

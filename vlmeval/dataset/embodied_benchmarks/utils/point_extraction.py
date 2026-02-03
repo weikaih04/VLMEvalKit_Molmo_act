@@ -15,46 +15,72 @@ from typing import List, Tuple, Optional, Union
 
 def extract_molmo_points(text: str) -> List[Tuple[float, float]]:
     """
-    Extract points from Molmo coords="x y" format.
+    Extract points from Molmo v2 coords="frame_idx point_idx x y ..." format.
 
-    Molmo outputs coordinates in format: coords="prefix x_coord y_coord"
-    where prefix is 1-2 digit number to skip, and x_coord/y_coord are 3-4 digits.
+    Uses the official two-step parsing from UnifiedPointFormatter:
+    1. frame_regex: separates frame_id from coordinates
+    2. points_regex: extracts (point_idx, x, y) from coordinates
 
-    Example: coords="1 1 946 029" -> point is (94.6, 2.9)
-    The "1 1" is a prefix, actual point is "946 029" (divide by 10 to get percentage).
+    Molmo2 format: <points coords="frame_idx point_1_idx x1 y1 point_2_idx x2 y2 ...">label</points>
+    Example: coords="1 1 461 527 2 481 521" -> points [(46.1, 52.7), (48.1, 52.1)]
 
+    Coordinates are in 0-1000 scale (3-4 digits with zero-padding).
     Returns points in 0-100 scale (percentage).
 
     Args:
-        text: Generated text containing coords="x y" patterns
+        text: Generated text containing coords="..." patterns
 
     Returns:
         List of (x, y) tuples in 0-100 scale
     """
     points = []
 
-    # First extract the coords string
-    coords_pattern = r'coords="([^"]+)"'
-    coords_match = re.search(coords_pattern, text)
+    # Step 1: Extract the coords string (official coord_regex)
+    coord_regex = re.compile(r'<(?:points|tracks).*? coords="([0-9\t:;, .]+)"/?>')
+    coord_match = coord_regex.search(text)
 
-    if not coords_match:
-        return points
+    if not coord_match:
+        # Fallback: try simpler pattern
+        coords_pattern = r'coords="([^"]+)"'
+        coord_match = re.search(coords_pattern, text)
+        if not coord_match:
+            return points
 
-    coords_str = coords_match.group(1)
+    coords_str = coord_match.group(1)
 
-    # Pattern from notebook: skip prefix number, extract 3-4 digit x and y
-    # Format: "prefix x_coord y_coord" where x_coord and y_coord are 3-4 digits
-    point_pattern = r"([0-9]+) ([0-9]{3,4}) ([0-9]{3,4})"
+    # Step 2: Use frame_regex to separate frame_id from coordinates (official method)
+    # This explicitly handles frame_idx instead of relying on digit count
+    # Supports multiple frames separated by \t, :, ,, or ;
+    frame_regex = re.compile(r"(?:^|\t|:|,|;)([0-9\.]+) ([0-9\. ]+)")
 
-    for match in re.finditer(point_pattern, coords_str):
-        try:
-            # First group is prefix (ignored), second is x, third is y
-            _, x_str, y_str = match.groups()
-            x = float(x_str) / 10.0  # Convert from 0-1000 to 0-100
-            y = float(y_str) / 10.0
-            points.append((x, y))
-        except (ValueError, IndexError):
-            continue
+    # Step 3: Extract points from coordinate part (official points_regex)
+    points_regex = re.compile(r"([0-9]+) ([0-9]{3,4}) ([0-9]{3,4})")
+
+    # Use finditer to handle multiple frames (video case)
+    frame_matches = list(frame_regex.finditer(coords_str))
+
+    if frame_matches:
+        # Official two-step method: frame_id is explicitly separated
+        for frame_match in frame_matches:
+            coord_part = frame_match.group(2)  # Get coordinates part after frame_id
+            for match in points_regex.finditer(coord_part):
+                try:
+                    _, x_str, y_str = match.groups()
+                    x = float(x_str) / 10.0  # Convert from 0-1000 to 0-100
+                    y = float(y_str) / 10.0
+                    points.append((x, y))
+                except (ValueError, IndexError):
+                    continue
+    else:
+        # Fallback: try direct matching on entire coords_str
+        for match in points_regex.finditer(coords_str):
+            try:
+                _, x_str, y_str = match.groups()
+                x = float(x_str) / 10.0
+                y = float(y_str) / 10.0
+                points.append((x, y))
+            except (ValueError, IndexError):
+                continue
 
     return points
 
