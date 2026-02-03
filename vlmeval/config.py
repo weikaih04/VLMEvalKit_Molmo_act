@@ -1755,6 +1755,12 @@ molmo_series = {
 molmo2_series = {
     "Molmo2-4B": partial(Molmo2, model_path="allenai/Molmo2-4B", max_new_tokens=512),
     "Molmo2-8B": partial(Molmo2, model_path="allenai/Molmo2-8B", max_new_tokens=512),
+    # Finetuned spatial checkpoint (step 1000)
+    "molmo2-4-spatial-tuning-v1-1k": partial(
+        Molmo2,
+        model_path="/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint",
+        max_new_tokens=512
+    ),
 }
 
 kosmos_series = {

@@ -31,7 +31,7 @@ def convert_to_molmo_prompt(original_question: str) -> str:
 
     Converted:
     "In the image, there is a bowl. Pinpoint several points within the
-    vacant space situated to the left of the bowl. Point to the region."
+    vacant space situated to the left of the bowl. Point to the areas that the prompt asked."
     """
     # Remove the format requirement part
     cleaned = re.sub(
@@ -41,7 +41,7 @@ def convert_to_molmo_prompt(original_question: str) -> str:
         flags=re.IGNORECASE | re.DOTALL
     )
     # Add pointing instruction to trigger Molmo's pointing mode
-    return cleaned.strip() + " Point to the region."
+    return cleaned.strip() + " Point to the areas that the prompt asked."
 
 
 class RoboSpatialPointingDataset(ImageBaseDataset):

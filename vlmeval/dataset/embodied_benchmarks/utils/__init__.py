@@ -2,6 +2,9 @@
 
 from .point_extraction import (
     extract_molmo_points,
+    extract_molmo_v1_points,
+    extract_click_format_points,
+    extract_xy_attribute_points,
     extract_python_tuple_points,
     extract_points_robust,
     check_point_in_mask,
@@ -20,6 +23,9 @@ from .evaluation_utils import (
 
 __all__ = [
     'extract_molmo_points',
+    'extract_molmo_v1_points',
+    'extract_click_format_points',
+    'extract_xy_attribute_points',
     'extract_python_tuple_points',
     'extract_points_robust',
     'check_point_in_mask',

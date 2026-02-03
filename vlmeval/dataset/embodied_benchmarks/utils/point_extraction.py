@@ -103,13 +103,105 @@ def extract_python_tuple_points(text: str) -> List[Tuple[float, float]]:
     return points
 
 
+def extract_molmo_v1_points(text: str) -> List[Tuple[float, float]]:
+    """
+    Extract points from Molmo v1 format: p=xxx,yyy or 1=xxx,yyy.
+
+    This is the format used by older Molmo models (v1).
+    Pattern: (?:\d+|p)\s*=\s*([0-9]{3})\s*,\s*([0-9]{3})
+
+    Returns points in 0-100 scale (percentage).
+
+    Args:
+        text: Generated text containing p=xxx,yyy patterns
+
+    Returns:
+        List of (x, y) tuples in 0-100 scale
+    """
+    points = []
+    # Pattern from official pointarena evaluator
+    pattern = r'(?:\d+|p)\s*=\s*([0-9]{3})\s*,\s*([0-9]{3})'
+
+    for match in re.finditer(pattern, text):
+        try:
+            x = int(match.group(1)) / 10.0  # Convert from 0-1000 to 0-100
+            y = int(match.group(2)) / 10.0
+            if 0 <= x <= 100 and 0 <= y <= 100:
+                points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    return points
+
+
+def extract_click_format_points(text: str) -> List[Tuple[float, float]]:
+    """
+    Extract points from Click(x,y) format (0-100 scale).
+
+    Pattern: Click(x.x, y.y)
+
+    Returns points in 0-100 scale (percentage).
+
+    Args:
+        text: Generated text containing Click(x,y) patterns
+
+    Returns:
+        List of (x, y) tuples in 0-100 scale
+    """
+    points = []
+    pattern = r'Click\(([0-9]+\.?[0-9]*),?\s*([0-9]+\.?[0-9]*)\)'
+
+    for match in re.finditer(pattern, text):
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            if 0 <= x <= 100 and 0 <= y <= 100:
+                points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    return points
+
+
+def extract_xy_attribute_points(text: str) -> List[Tuple[float, float]]:
+    """
+    Extract points from x="x" y="y" format (0-100 scale).
+
+    Pattern: x1="45.5" y1="67.3"
+
+    Returns points in 0-100 scale (percentage).
+
+    Args:
+        text: Generated text containing x="x" y="y" patterns
+
+    Returns:
+        List of (x, y) tuples in 0-100 scale
+    """
+    points = []
+    pattern = r'x\d*="\s*([0-9]+(?:\.[0-9]+)?)"\s+y\d*="\s*([0-9]+(?:\.[0-9]+)?)"'
+
+    for match in re.finditer(pattern, text):
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            if 0 <= x <= 100 and 0 <= y <= 100:
+                points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    return points
+
+
 def extract_points_robust(text: str) -> List[Tuple[float, float]]:
     """
     Robust point extraction using multiple strategies.
 
     Tries in order:
-    1. Python tuple format (most common in model outputs)
-    2. Molmo coords format
+    1. Molmo v2 coords format (coords="prefix x y")
+    2. Molmo v1 format (p=xxx,yyy)
+    3. Click format (Click(x,y))
+    4. xy attribute format (x="x" y="y")
+    5. Python tuple format ((x, y))
 
     Returns points in 0-100 scale (percentage).
 
@@ -119,13 +211,28 @@ def extract_points_robust(text: str) -> List[Tuple[float, float]]:
     Returns:
         List of (x, y) tuples in 0-100 scale
     """
-    # Strategy A: Try Python tuple format first
-    points = extract_python_tuple_points(text)
+    # Strategy A: Try Molmo v2 coords format first (most common for Molmo2)
+    points = extract_molmo_points(text)
     if points:
         return points
 
-    # Strategy B: Try Molmo coords format
-    points = extract_molmo_points(text)
+    # Strategy B: Try Molmo v1 format (p=xxx,yyy)
+    points = extract_molmo_v1_points(text)
+    if points:
+        return points
+
+    # Strategy C: Try Click format
+    points = extract_click_format_points(text)
+    if points:
+        return points
+
+    # Strategy D: Try xy attribute format
+    points = extract_xy_attribute_points(text)
+    if points:
+        return points
+
+    # Strategy E: Try Python tuple format
+    points = extract_python_tuple_points(text)
     if points:
         return points
 

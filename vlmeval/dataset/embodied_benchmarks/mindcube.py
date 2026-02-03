@@ -28,9 +28,9 @@ class MindCubeDataset(ImageBaseDataset):
 
     @classmethod
     def supported_datasets(cls):
-        return ['MindCube_Embodied', 'MindCube_tinybench']
+        return ['MindCube_Tiny_Embodied', 'MindCube_tinybench']
 
-    def __init__(self, dataset='MindCube_Embodied', **kwargs):
+    def __init__(self, dataset='MindCube_Tiny_Embodied', **kwargs):
         self.dataset_name = dataset
 
         # Determine split from dataset name

@@ -21,11 +21,12 @@ class Molmo2(BaseModel):
     - Transformers backend (default)
     - vLLM backend (use_vllm=True) - requires mm_olmo
     - Multiple images
-    - Video frames (as multiple images)
+    - Video input (up to 384 frames)
     """
 
     INSTALL_REQ = False
     INTERLEAVE = True  # Support interleaved image/text
+    VIDEO_LLM = True   # Support video input
 
     def __init__(
         self,
@@ -62,6 +63,9 @@ class Molmo2(BaseModel):
         # Set environment variables
         os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
         os.environ['VLLM_USE_V1'] = '0'
+        # Disable V1 multiprocessing to speed up multimodal request preprocessing
+        # See: https://github.com/vllm-project/vllm/issues/16185
+        os.environ['VLLM_ENABLE_V1_MULTIPROCESSING'] = '0'
 
         # Add mm_olmo to path
         if self.mm_olmo_path not in sys.path:
@@ -100,8 +104,10 @@ class Molmo2(BaseModel):
             max_model_len = self.kwargs.get('max_model_len', 32768)
             max_images = self.kwargs.get('max_images_per_prompt', 16)
 
-            max_num_seqs = self.kwargs.get('max_num_seqs', 16)  # 并发序列数
+            max_num_seqs = self.kwargs.get('max_num_seqs', 128)  # 并发序列数
 
+            # Disable caching to avoid "Expected a cached item for mm_hash" errors
+            # See: https://github.com/vllm-project/vllm/issues/11371
             self.llm = LLM(
                 model=self.model_path,
                 tensor_parallel_size=tensor_parallel_size,
@@ -110,6 +116,9 @@ class Molmo2(BaseModel):
                 max_model_len=max_model_len,
                 max_num_seqs=max_num_seqs,
                 limit_mm_per_prompt={"image": max_images, "video": 1},
+                enable_prefix_caching=False,
+                mm_processor_cache_gb=0,  # Disable mm processor cache
+                disable_mm_preprocessor_cache=True,  # Explicitly disable
             )
 
             self.sampling_params_class = SamplingParams
@@ -179,6 +188,10 @@ class Molmo2(BaseModel):
                 else:
                     continue
                 content.append({"type": "image", "image": img})
+            elif item['type'] == 'video':
+                # Handle video input - value is video file path
+                video_path = item['value']
+                content.append({"type": "video", "video": video_path})
             elif item['type'] == 'text':
                 content.append({"type": "text", "text": item['value']})
 
@@ -214,6 +227,7 @@ class Molmo2(BaseModel):
         """Prepare a single vLLM input from a message."""
         content = []
         images = []
+        videos = []
 
         for item in message:
             if item['type'] == 'image':
@@ -226,6 +240,11 @@ class Molmo2(BaseModel):
                     continue
                 images.append(img)
                 content.append({"type": "image", "image": img})
+            elif item['type'] == 'video':
+                # Handle video input - value is video file path
+                video_path = item['value']
+                videos.append(video_path)
+                content.append({"type": "video", "video": video_path})
             elif item['type'] == 'text':
                 content.append({"type": "text", "text": item['value']})
 
@@ -242,11 +261,40 @@ class Molmo2(BaseModel):
         mm_data = {}
         if images:
             mm_data['image'] = images
+        if videos:
+            # For vLLM, we need to load video frames
+            # Use decord or opencv to extract frames
+            video_frames = self._load_video_frames(videos[0])
+            if video_frames:
+                mm_data['video'] = video_frames
 
         return {
             'prompt': prompt,
             'multi_modal_data': mm_data,
         }
+
+    def _load_video_frames(self, video_path, max_frames=32):
+        """Load video for vLLM using official Molmo2VideoBackend."""
+        try:
+            from olmo.vllm.video_backend import Molmo2VideoBackend
+
+            # Read video file as bytes
+            with open(video_path, 'rb') as f:
+                video_bytes = f.read()
+
+            # Use official implementation
+            # frame_sample_mode=None means load all frames and let hf processor sample
+            # do_sample_frames=True will be set in metadata
+            frames, metadata = Molmo2VideoBackend.load_bytes(
+                video_bytes,
+                backend="decord",
+                frame_sample_mode=None,  # Let processor handle sampling
+                num_frames=max_frames,
+            )
+            return (frames, metadata)
+        except Exception as e:
+            print(f"Warning: Failed to load video with official backend: {e}")
+            return None
 
     def _generate_vllm(self, message, dataset=None):
         """Generate using vLLM backend (single input)."""
@@ -284,12 +332,26 @@ class Molmo2(BaseModel):
             return [self._generate_transformers(msg, dataset) for msg in messages]
 
         # Prepare all inputs in parallel using ThreadPool
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from tqdm import tqdm
         import os
 
-        num_workers = min(32, os.cpu_count() or 8)
+        # Video loading is I/O + CPU bound (decoding)
+        # Use more workers to maximize throughput on high-core systems
+        num_workers = min(64, os.cpu_count() or 8)
+        vllm_inputs = [None] * len(messages)
+
+        print(f"Preparing {len(messages)} inputs with {num_workers} workers...")
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            vllm_inputs = list(executor.map(self._prepare_vllm_input, messages))
+            future_to_idx = {executor.submit(self._prepare_vllm_input, msg): i
+                           for i, msg in enumerate(messages)}
+            for future in tqdm(as_completed(future_to_idx), total=len(messages), desc="Loading videos"):
+                idx = future_to_idx[future]
+                try:
+                    vllm_inputs[idx] = future.result()
+                except Exception as e:
+                    print(f"Error preparing input {idx}: {e}")
+                    vllm_inputs[idx] = {'prompt': '', 'multi_modal_data': {}}
 
         # Sampling parameters
         sampling_params = self.sampling_params_class(
@@ -297,7 +359,8 @@ class Molmo2(BaseModel):
             max_tokens=self.max_new_tokens,
         )
 
-        # Generate batch
+        # Generate all at once - vLLM handles batching internally
+        print(f"Generating {len(vllm_inputs)} responses...")
         outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params)
 
         # Extract responses

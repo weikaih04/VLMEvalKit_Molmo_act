@@ -40,6 +40,8 @@ from .cosmos_reason import CosmosReason1Dataset
 from .minimal_videos import MinimalVideosDataset
 from .open_eqa import OpenEQADataset
 from .erqa import ERQADataset
+from .mmsi_bench import MMSIBenchDataset
+from .point_bench import PointBenchDataset
 
 __all__ = [
     'EMBODIED_DATA_ROOT',
@@ -57,4 +59,6 @@ __all__ = [
     'MinimalVideosDataset',
     'OpenEQADataset',
     'ERQADataset',
+    'MMSIBenchDataset',
+    'PointBenchDataset',
 ]

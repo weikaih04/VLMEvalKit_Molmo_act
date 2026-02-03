@@ -24,20 +24,42 @@ COSMOS_SUBSETS = ["robofail", "robovqa"]
 
 
 def extract_frames(video_path, num_frames=8):
-    """Extract uniformly spaced frames from video."""
+    """Extract uniformly spaced frames from video.
+
+    Uses decord if available (faster), falls back to OpenCV.
+    """
+    if not os.path.exists(video_path):
+        return []
+
+    # Try decord first (much faster for video frame extraction)
+    try:
+        from decord import VideoReader, cpu
+        vr = VideoReader(video_path, ctx=cpu(0))
+        total_frames = len(vr)
+        if total_frames <= 0:
+            return []
+
+        indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+        frames_array = vr.get_batch(indices).asnumpy()  # Batch extraction is faster
+        frames = [Image.fromarray(frame) for frame in frames_array]
+        return frames
+    except ImportError:
+        pass  # Fall back to OpenCV
+    except Exception:
+        pass  # Fall back to OpenCV on any error
+
+    # OpenCV fallback
     try:
         import cv2
     except ImportError:
-        print("Warning: OpenCV not available for video loading")
-        return []
-
-    if not os.path.exists(video_path):
+        print("Warning: Neither decord nor OpenCV available for video loading")
         return []
 
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     if total_frames <= 0:
+        cap.release()
         return []
 
     # Uniform sampling

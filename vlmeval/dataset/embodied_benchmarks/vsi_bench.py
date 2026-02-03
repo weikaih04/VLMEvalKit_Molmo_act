@@ -52,21 +52,44 @@ def find_visual_file(data_root, dataset_name, scene_name):
     return None
 
 
-def load_video_frames(file_path, target_frames=16):
-    """Load video frames with dynamic sampling."""
-    try:
-        import cv2
-    except ImportError:
-        print("Warning: OpenCV not available for video loading")
-        return []
+def load_video_frames(file_path, target_frames=8):
+    """Load video frames with dynamic sampling.
 
+    Uses decord if available (faster), falls back to OpenCV.
+    """
     if file_path.lower().endswith(('.mp4', '.mov', '.avi')):
+        # Try decord first (much faster for video frame extraction)
+        try:
+            from decord import VideoReader, cpu
+            vr = VideoReader(file_path, ctx=cpu(0))
+            total_frames = len(vr)
+            if total_frames <= 0:
+                return []
+
+            # Sample frames uniformly
+            indices = np.linspace(0, total_frames - 1, target_frames, dtype=int)
+            frames_array = vr.get_batch(indices).asnumpy()  # Batch extraction is faster
+            frames = [Image.fromarray(frame) for frame in frames_array]
+            return frames
+        except ImportError:
+            pass  # Fall back to OpenCV
+        except Exception:
+            pass  # Fall back to OpenCV on any error
+
+        # OpenCV fallback
+        try:
+            import cv2
+        except ImportError:
+            print("Warning: Neither decord nor OpenCV available for video loading")
+            return []
+
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
             return []
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         if total_frames <= 0:
+            cap.release()
             return []
 
         # Calculate sampling rate to fit target_frames
@@ -107,7 +130,7 @@ class VSIBenchDataset(VideoBaseDataset):
 
     def __init__(self, dataset='VSI_Bench_Embodied', **kwargs):
         self.dataset_name = dataset
-        self.target_frames = kwargs.get('target_frames', 16)
+        self.target_frames = kwargs.get('target_frames', 16)  # 8 frames like notebook
 
         # Video data root (where dataset/scene videos are stored)
         self.video_root = kwargs.get('video_root', os.path.join(EMBODIED_DATA_ROOT, 'vsi_bench'))

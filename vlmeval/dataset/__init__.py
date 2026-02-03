@@ -118,6 +118,8 @@ from .embodied_benchmarks import (
     MinimalVideosDataset,
     OpenEQADataset,
     ERQADataset,
+    MMSIBenchDataset,
+    PointBenchDataset,
 )
 
 
@@ -253,7 +255,8 @@ IMAGE_DATASET = [
     # Embodied Benchmarks (Image)
     CVBenchDataset, EmbSpatialBenchDataset, SATDataset, MindCubeDataset,
     BLINKDataset, RefSpatialBenchDataset, RoboSpatialPointingDataset,
-    RoboSpatialVQADataset, Where2PlaceDataset, ERQADataset,
+    RoboSpatialVQADataset, Where2PlaceDataset, ERQADataset, MMSIBenchDataset,
+    PointBenchDataset,
 ]
 
 VIDEO_DATASET = [

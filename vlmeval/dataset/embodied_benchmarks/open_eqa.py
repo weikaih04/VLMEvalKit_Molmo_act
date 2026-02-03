@@ -2,12 +2,13 @@
 OpenEQA Dataset Implementation
 
 OpenEQA is an open-ended video QA benchmark.
-- Dataset: JSON metadata + local frame folders
+- Dataset: JSON metadata + local frame folders or video files
 - Format: Video VQA (open-ended)
 - Evaluation: Only saves predictions (no automatic scoring)
 
-Frames are stored as individual images in folders:
+Data structure:
   {data_root}/frames/{episode_history}/00001.jpg, 00002.jpg, ...
+  {data_root}/videos/{episode_history}.mp4  (optional, for video mode)
 """
 
 import os
@@ -78,7 +79,7 @@ class OpenEQADataset(VideoBaseDataset):
         self._load_local_dataset()
 
     def _load_local_dataset(self):
-        """Load dataset from local JSON and frame folders."""
+        """Load dataset from local JSON and frame folders/videos."""
         if not os.path.exists(self.json_path):
             print(f"Warning: OpenEQA JSON not found at {self.json_path}")
             self.data = pd.DataFrame()
@@ -95,17 +96,19 @@ class OpenEQADataset(VideoBaseDataset):
             gt_answer = item['answer']
             rel_path = item['episode_history']  # e.g. "hm3d-v0/000-hm3d-BFRyYbPCCPE"
 
-            # Construct full path
-            full_path = os.path.join(self.data_root, "frames", rel_path)
+            # Construct paths
+            frames_path = os.path.join(self.data_root, "frames", rel_path)
+            video_path = os.path.join(self.data_root, "videos", rel_path + ".mp4")
 
             # Only include samples with valid frame folders
-            if not os.path.exists(full_path):
+            if not os.path.exists(frames_path):
                 continue
 
             data_list.append({
                 'index': idx_counter,
                 'episode_history': rel_path,
-                'frames_path': full_path,
+                'frames_path': frames_path,
+                'video_path': video_path if os.path.exists(video_path) else None,
                 'question': question,
                 'answer': gt_answer,
             })
@@ -114,7 +117,8 @@ class OpenEQADataset(VideoBaseDataset):
         self.data = pd.DataFrame(data_list)
 
         if len(self.data) > 0:
-            print(f"OpenEQA: Loaded {len(self.data)} samples with valid frame folders")
+            num_with_video = self.data['video_path'].notna().sum()
+            print(f"OpenEQA: Loaded {len(self.data)} samples ({num_with_video} with video files)")
         else:
             print(f"Warning: No valid frame folders found in {os.path.join(self.data_root, 'frames')}")
 
@@ -127,25 +131,37 @@ class OpenEQADataset(VideoBaseDataset):
             'index': item['index'],
             'episode_history': item['episode_history'],
             'frames_path': item['frames_path'],
+            'video_path': item['video_path'],
             'question': item['question'],
             'answer': item['answer'],
         }
 
-    def build_prompt(self, line):
-        """Build prompt with video frames."""
+    def build_prompt(self, line, video_llm=False):
+        """Build prompt with video or image frames.
+
+        Args:
+            line: Data row or index
+            video_llm: If True and video file exists, use type='video'.
+                      Otherwise, use type='image' for each frame.
+        """
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        frames_path = line['frames_path']
         question = line['question']
+        video_path = line.get('video_path')
+        frames_path = line['frames_path']
 
-        # Load frames
-        frames = get_frames_from_folder(frames_path, self.num_frames)
-
-        # Build message: frames + question
         msgs = []
-        for frame in frames:
-            msgs.append(dict(type='image', value=frame))
+
+        # Use video mode if video_llm=True and video file exists
+        if video_llm and video_path and os.path.exists(video_path):
+            msgs.append(dict(type='video', value=video_path))
+        else:
+            # Fallback to multi-image mode
+            frames = get_frames_from_folder(frames_path, self.num_frames)
+            for frame in frames:
+                msgs.append(dict(type='image', value=frame))
+
         msgs.append(dict(type='text', value=question))
 
         return msgs

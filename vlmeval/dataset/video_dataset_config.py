@@ -1,4 +1,5 @@
 from vlmeval.dataset import *
+from vlmeval.dataset.embodied_benchmarks import OpenEQADataset
 from functools import partial
 
 vcrbench_dataset = {
@@ -193,9 +194,15 @@ egoexobench_dataset = {
 }
 
 vsibench_dataset = {
+    'vsibench_4frame': partial(VSIBench, dataset='VSIBench', nframe=4),
+    'vsibench_8frame': partial(VSIBench, dataset='VSIBench', nframe=8),
     'vsibench_16frame': partial(VSIBench, dataset='VSIBench', nframe=16),
     'vsibench_32frame': partial(VSIBench, dataset='VSIBench', nframe=32),
     'vsibench_64frame': partial(VSIBench, dataset='VSIBench', nframe=64),
+}
+
+openeqa_dataset = {
+    'openeqa_32frame': partial(OpenEQADataset, dataset='OpenEQA_Embodied', num_frames=32),
 }
 
 dream_1k_dataset = {
@@ -213,7 +220,7 @@ dataset_groups = [
     mlvu_dataset, tempcompass_dataset, cgbench_dataset, worldsense_dataset, tamperbench_dataset,
     megabench_dataset, qbench_video_dataset, moviechat1k_dataset, vdc_dataset, video_holmes_dataset, vcrbench_dataset,
     cg_av_counting_dataset, video_mmlu_dataset, egoexobench_dataset, dream_1k_dataset, video_tt_dataset,
-    vsibench_dataset
+    vsibench_dataset, openeqa_dataset
 ]
 
 for grp in dataset_groups:
