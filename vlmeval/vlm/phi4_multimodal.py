@@ -17,10 +17,18 @@ class Phi4Multimodal(BaseModel):
             logging.critical('Please install the latest version transformers.')
             raise e
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path, device_map='cuda', trust_remote_code=True,
-            torch_dtype='auto',attn_implementation='flash_attention_2'
-        ).eval()
+        # Try flash_attention_2 first, fall back to sdpa if not available
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path, device_map='cuda', trust_remote_code=True,
+                torch_dtype='auto', attn_implementation='flash_attention_2'
+            ).eval()
+        except ImportError:
+            logging.warning("flash_attn not installed, falling back to sdpa attention")
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path, device_map='cuda', trust_remote_code=True,
+                torch_dtype='auto', attn_implementation='sdpa'
+            ).eval()
         processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         generation_config = GenerationConfig.from_pretrained(model_path)
 

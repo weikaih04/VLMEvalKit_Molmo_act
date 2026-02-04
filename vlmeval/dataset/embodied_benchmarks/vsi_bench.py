@@ -192,8 +192,14 @@ class VSIBenchDataset(VideoBaseDataset):
             'answer': item['answer'],
         }
 
-    def build_prompt(self, line):
-        """Build prompt with video frames."""
+    def build_prompt(self, line, video_llm=False):
+        """Build prompt with video or image frames.
+
+        Args:
+            line: Data row or index
+            video_llm: If True and video file exists, use type='video'.
+                      Otherwise, use type='image' for each frame.
+        """
         if isinstance(line, int):
             line = self.data.iloc[line]
 
@@ -201,12 +207,7 @@ class VSIBenchDataset(VideoBaseDataset):
         question = line['question']
         options = line['options']
 
-        # Load video frames
-        frames = []
-        if video_path and os.path.exists(video_path):
-            frames = load_video_frames(video_path, self.target_frames)
-
-        # Build prompt
+        # Build prompt text
         if options:
             # MCQ format
             letters = ["(A)", "(B)", "(C)", "(D)"]
@@ -217,8 +218,18 @@ class VSIBenchDataset(VideoBaseDataset):
 
         # Build message
         msgs = []
-        for frame in frames:
-            msgs.append(dict(type='image', value=frame))
+
+        # Use video mode if video_llm=True and video file exists
+        if video_llm and video_path and os.path.exists(video_path):
+            msgs.append(dict(type='video', value=video_path))
+        else:
+            # Fallback to multi-image mode
+            frames = []
+            if video_path and os.path.exists(video_path):
+                frames = load_video_frames(video_path, self.target_frames)
+            for frame in frames:
+                msgs.append(dict(type='image', value=frame))
+
         msgs.append(dict(type='text', value=prompt_text))
 
         return msgs

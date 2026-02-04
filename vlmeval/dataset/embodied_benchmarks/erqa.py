@@ -150,6 +150,10 @@ class ERQADataset(ImageBaseDataset):
     def __init__(self, dataset='ERQA_Embodied', **kwargs):
         self.dataset_name = dataset
 
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'erqa', 'images')
+        os.makedirs(self.img_root, exist_ok=True)
+
         # TFRecord path
         default_path = os.path.join(EMBODIED_DATA_ROOT, 'erqa', 'erqa.tfrecord')
         self.tfrecord_path = kwargs.get('tfrecord_path', default_path)
@@ -170,9 +174,23 @@ class ERQADataset(ImageBaseDataset):
             img_count = len(sample['images'])
             category = "Single-Image" if img_count == 1 else "Multi-Image"
 
+            # Save images to disk and store file paths
+            image_paths = []
+            for img_idx, img in enumerate(sample['images']):
+                img_path = os.path.join(self.img_root, f'{idx:06d}_{img_idx}.jpg')
+                if not os.path.exists(img_path):
+                    try:
+                        img.convert('RGB').save(img_path, 'JPEG')
+                    except Exception:
+                        continue
+                image_paths.append(img_path)
+
+            if not image_paths:
+                continue
+
             data_list.append({
                 'index': idx,
-                'images': sample['images'],
+                'image_paths': image_paths,
                 'visual_indices': sample['visual_indices'],
                 'question': sample['question'],
                 'answer': sample['answer'],
@@ -189,7 +207,7 @@ class ERQADataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'images': item['images'],
+            'image_paths': item['image_paths'],
             'visual_indices': item['visual_indices'],
             'question': item['question'],
             'answer': item['answer'],
@@ -201,14 +219,14 @@ class ERQADataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        images = line['images']
+        image_paths = line['image_paths']
         visual_indices = line['visual_indices']
         question = line['question']
 
-        # Construct interleaved content
-        content = construct_interleaved_content(question, images, visual_indices)
+        # Construct interleaved content using file paths
+        content = construct_interleaved_content(question, image_paths, visual_indices)
 
-        # Convert to VLMEvalKit message format
+        # Convert to VLMEvalKit message format (pass file paths, not PIL objects)
         msgs = []
         for item in content:
             if item['type'] == 'image':
@@ -219,10 +237,10 @@ class ERQADataset(ImageBaseDataset):
         return msgs
 
     def dump_image(self, line):
-        """Return images."""
+        """Return image paths."""
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['images']
+        return line['image_paths']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate predictions.

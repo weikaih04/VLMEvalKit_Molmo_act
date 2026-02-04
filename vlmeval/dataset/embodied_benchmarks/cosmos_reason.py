@@ -23,15 +23,32 @@ from . import EMBODIED_DATA_ROOT
 COSMOS_SUBSETS = ["robofail", "robovqa"]
 
 
-def extract_frames(video_path, num_frames=8):
-    """Extract uniformly spaced frames from video.
+def extract_frames(video_path, num_frames=8, frame_cache_dir=None):
+    """Extract uniformly spaced frames from video and save to disk.
 
     Uses decord if available (faster), falls back to OpenCV.
+    Returns list of file paths instead of PIL Image objects.
     """
     if not os.path.exists(video_path):
         return []
 
+    # Create frame cache directory if provided
+    if frame_cache_dir is None:
+        frame_cache_dir = os.path.join(EMBODIED_DATA_ROOT, 'cosmos_reason1', 'frames')
+    os.makedirs(frame_cache_dir, exist_ok=True)
+
+    # Generate unique ID for this video
+    video_id = os.path.splitext(os.path.basename(video_path))[0]
+    parent_dir = os.path.basename(os.path.dirname(video_path))
+    frame_prefix = f"{parent_dir}_{video_id}"
+
+    # Check if frames already cached
+    frame_paths = [os.path.join(frame_cache_dir, f"{frame_prefix}_{i:03d}.jpg") for i in range(num_frames)]
+    if all(os.path.exists(p) for p in frame_paths):
+        return frame_paths
+
     # Try decord first (much faster for video frame extraction)
+    frames = []
     try:
         from decord import VideoReader, cpu
         vr = VideoReader(video_path, ctx=cpu(0))
@@ -42,39 +59,47 @@ def extract_frames(video_path, num_frames=8):
         indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
         frames_array = vr.get_batch(indices).asnumpy()  # Batch extraction is faster
         frames = [Image.fromarray(frame) for frame in frames_array]
-        return frames
     except ImportError:
         pass  # Fall back to OpenCV
     except Exception:
         pass  # Fall back to OpenCV on any error
 
     # OpenCV fallback
-    try:
-        import cv2
-    except ImportError:
-        print("Warning: Neither decord nor OpenCV available for video loading")
-        return []
+    if not frames:
+        try:
+            import cv2
+        except ImportError:
+            print("Warning: Neither decord nor OpenCV available for video loading")
+            return []
 
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    if total_frames <= 0:
+        if total_frames <= 0:
+            cap.release()
+            return []
+
+        # Uniform sampling
+        indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(frame_rgb))
+
         cap.release()
-        return []
 
-    # Uniform sampling
-    indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
-    frames = []
+    # Save frames to disk and return paths
+    frame_paths = []
+    for i, frame in enumerate(frames):
+        frame_path = os.path.join(frame_cache_dir, f"{frame_prefix}_{i:03d}.jpg")
+        if not os.path.exists(frame_path):
+            frame.convert('RGB').save(frame_path, 'JPEG')
+        frame_paths.append(frame_path)
 
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(Image.fromarray(frame_rgb))
-
-    cap.release()
-    return frames
+    return frame_paths
 
 
 def format_cosmos_prompt(qa_data):
@@ -185,32 +210,42 @@ class CosmosReason1Dataset(VideoBaseDataset):
             'answer': item['answer'],
         }
 
-    def build_prompt(self, line):
-        """Build prompt with video frames."""
+    def build_prompt(self, line, video_llm=False):
+        """Build prompt with video or image frames.
+
+        Args:
+            line: Data row or index
+            video_llm: If True and video file exists, use type='video'.
+                      Otherwise, use type='image' for each frame.
+        """
         if isinstance(line, int):
             line = self.data.iloc[line]
 
         video_path = line['video_path']
         qa_data = line['qa_data']
 
-        # Load video frames
-        frames = []
-        if video_path and os.path.exists(video_path):
-            frames = extract_frames(video_path, self.num_frames)
-
         # Build prompt text
         prompt_text = format_cosmos_prompt(qa_data)
 
-        # Build message: [IMG, IMG, ..., TEXT]
         msgs = []
-        for frame in frames:
-            msgs.append(dict(type='image', value=frame))
+
+        # Use video mode if video_llm=True and video file exists
+        if video_llm and video_path and os.path.exists(video_path):
+            msgs.append(dict(type='video', value=video_path))
+        else:
+            # Fallback to multi-image mode (extract frames)
+            frame_paths = []
+            if video_path and os.path.exists(video_path):
+                frame_paths = extract_frames(video_path, self.num_frames)
+            for frame_path in frame_paths:
+                msgs.append(dict(type='image', value=frame_path))
+
         msgs.append(dict(type='text', value=prompt_text))
 
         return msgs
 
     def dump_image(self, line):
-        """Return video frames."""
+        """Return video frame paths."""
         if isinstance(line, int):
             line = self.data.iloc[line]
 

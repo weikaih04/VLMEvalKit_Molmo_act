@@ -14,7 +14,7 @@ import pandas as pd
 from PIL import Image
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import text2pts_official, calculate_accuracy_official
+from .utils import text2pts_official, calculate_accuracy_official, get_model_type
 from . import EMBODIED_DATA_ROOT
 
 
@@ -86,18 +86,19 @@ class Where2PlaceDataset(ImageBaseDataset):
             try:
                 image = Image.open(img_path).convert('RGB')
                 mask = Image.open(mask_path).convert('L')
+                img_width = image.width
+                img_height = image.height
             except Exception:
                 continue
 
             data_list.append({
                 'index': idx,
-                'image': image,
                 'mask': mask,
                 'question': query,
                 'image_path': img_path,
                 'mask_path': mask_path,
-                'image_width': image.width,
-                'image_height': image.height,
+                'image_width': img_width,
+                'image_height': img_height,
             })
 
         self.data = pd.DataFrame(data_list)
@@ -110,29 +111,43 @@ class Where2PlaceDataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'image': item['image'],
+            'image_path': item['image_path'],
             'mask': item['mask'],
             'question': item['question'],
         }
 
-    def build_prompt(self, line):
-        """Build placement prompt."""
+    def build_prompt(self, line, model_name=None):
+        """Build placement prompt with model-specific format."""
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        image = line['image']
+        image_path = line['image_path']
         question = line['question']
 
+        model_type = get_model_type(model_name)
+
+        if model_type == 'molmo':
+            prompt_text = question
+        elif model_type == 'qwen':
+            prompt_text = question + "\nOutput the coordinates in XML format <points x y>object</points>."
+        else:
+            # llava, internvl, phi4
+            prompt_text = (
+                question + "\nGive EXACT PIXEL COORDINATES in [x, y] format, "
+                "where x is horizontal and y is vertical. "
+                "ONLY return coordinates with no additional text."
+            )
+
         msgs = [
-            dict(type='image', value=image),
-            dict(type='text', value=question),
+            dict(type='image', value=image_path),
+            dict(type='text', value=prompt_text),
         ]
         return msgs
 
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['image']
+        return line['image_path']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate placement predictions.

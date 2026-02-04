@@ -13,6 +13,7 @@ FAIL_MSG = 'Failed to obtain answer via API.'
 class VSIBench(VideoBaseDataset):
     MD5 = '021f7dd80ab879b4f3329290e804ed15'
     TYPE = 'VIDEO-MCQ-and-NA'
+    MODALITY = 'VIDEO'  # Required for DATASET_MODALITY() to detect video datasets
 
     MCA_QUESTION_TYPES = [
         "object_rel_direction_easy",
@@ -146,22 +147,29 @@ class VSIBench(VideoBaseDataset):
             line = self.data.iloc[line]
 
         message = []
-        img_frame_paths = self.save_video_frames(line)
-        for im in img_frame_paths:
-            message.append(dict(type='image', value=im))
 
-        pre_prompt = "These are frames of a video."  # pre_prompt = ""
+        # video_llm=True: return video path directly for models that support video input
+        # video_llm=False: return individual frames as images
+        if video_llm:
+            vid_path = osp.join(self.data_root, line['prefix'], line['video'] + '.mp4')
+            message.append(dict(type='video', value=vid_path))
+            pre_prompt = ""  # No need to say "These are frames of a video" for video input
+        else:
+            img_frame_paths = self.save_video_frames(line)
+            for im in img_frame_paths:
+                message.append(dict(type='image', value=im))
+            pre_prompt = "These are frames of a video."
 
         assert line['type'] in self.NA_QUESTION_TYPES or line['type'] in self.MCA_QUESTION_TYPES
 
         if line['type'] in self.NA_QUESTION_TYPES:
             post_prompt = "Please answer the question using a single word or phrase."
-            prompt = pre_prompt + "\n" + line['question'] + "\n" + post_prompt
+            prompt = pre_prompt + "\n" + line['question'] + "\n" + post_prompt if pre_prompt else line['question'] + "\n" + post_prompt
             message.append(dict(type='text', value=prompt))
         else:
             options = "Options:\n" + "\n".join(ast.literal_eval(line["candidates"]))
             post_prompt = "Answer with the option's letter from the given choices directly."
-            prompt = "\n".join([pre_prompt, line['question'], options, post_prompt])
+            prompt = "\n".join([pre_prompt, line['question'], options, post_prompt]) if pre_prompt else "\n".join([line['question'], options, post_prompt])
             message.append(dict(type='text', value=prompt))
         return message
 

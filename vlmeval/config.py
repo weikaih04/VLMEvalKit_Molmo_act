@@ -1761,6 +1761,17 @@ molmo2_series = {
         model_path="/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint",
         max_new_tokens=512
     ),
+    # V3 spatial checkpoints
+    "molmo2-4b-spatial-v3-2k": partial(
+        Molmo2,
+        model_path="/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-2k",
+        max_new_tokens=512
+    ),
+    "molmo2-4b-spatial-v3-7k": partial(
+        Molmo2,
+        model_path="/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-7k",
+        max_new_tokens=512
+    ),
 }
 
 kosmos_series = {

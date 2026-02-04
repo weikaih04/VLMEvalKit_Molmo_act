@@ -9,6 +9,7 @@ SAT is a spatial understanding benchmark with circular evaluation.
 """
 
 import io
+import os
 import random
 import pandas as pd
 from PIL import Image
@@ -16,6 +17,7 @@ from datasets import load_dataset
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
 from .utils import extract_answer_letter
+from . import EMBODIED_DATA_ROOT
 
 
 class SATDataset(ImageBaseDataset):
@@ -35,6 +37,9 @@ class SATDataset(ImageBaseDataset):
         self.dataset_name = dataset
         self.seed = seed
         random.seed(seed)
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'sat', 'images')
+        os.makedirs(self.img_root, exist_ok=True)
         self._load_hf_dataset()
 
     def _decode_images(self, item):
@@ -95,9 +100,23 @@ class SATDataset(ImageBaseDataset):
             except ValueError:
                 continue
 
+            # Save images to disk and store file paths
+            image_paths = []
+            for img_idx, img in enumerate(images):
+                img_path = os.path.join(self.img_root, f'{idx:06d}_{img_idx}.jpg')
+                if not os.path.exists(img_path):
+                    try:
+                        img.save(img_path, 'JPEG')
+                    except Exception:
+                        img.convert('RGB').save(img_path, 'JPEG')
+                image_paths.append(img_path)
+
+            if not image_paths:
+                continue
+
             data_list.append({
                 'index': idx,
-                'images': images,
+                'image_paths': image_paths,
                 'question': question,
                 'options': shuffled_options,
                 'original_options': raw_options,
@@ -115,7 +134,7 @@ class SATDataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'images': item['images'],
+            'image_paths': item['image_paths'],
             'question': item['question'],
             'options': item['options'],
             'answer': item['answer'],
@@ -126,7 +145,7 @@ class SATDataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        images = line['images']
+        image_paths = line['image_paths']
         question = line['question']
         options = line['options']
 
@@ -139,10 +158,10 @@ class SATDataset(ImageBaseDataset):
 
         prompt = f"{question}\n" + "\n".join(formatted_options) + "\nAnswer with the option letter."
 
-        # Build message with multiple images
+        # Build message with multiple images (pass file paths, not PIL objects)
         msgs = []
-        for img in images:
-            msgs.append(dict(type='image', value=img))
+        for img_path in image_paths:
+            msgs.append(dict(type='image', value=img_path))
         msgs.append(dict(type='text', value=prompt))
 
         return msgs
@@ -150,7 +169,7 @@ class SATDataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['images']
+        return line['image_paths']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate predictions."""

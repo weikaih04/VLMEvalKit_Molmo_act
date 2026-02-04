@@ -18,7 +18,7 @@ import pandas as pd
 from PIL import Image
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import extract_points_robust, extract_molmo_points
+from .utils import extract_points_robust, extract_molmo_points, format_pointing_prompt, get_model_type
 from . import EMBODIED_DATA_ROOT
 
 
@@ -147,21 +147,34 @@ class PointBenchDataset(ImageBaseDataset):
             'count': item['count'],
         }
 
-    def build_prompt(self, line):
-        """Build prompt for pointing task."""
+    def build_prompt(self, line, model_name=None):
+        """Build prompt for pointing task with model-specific format."""
         if isinstance(line, int):
             line = self.data.iloc[line]
 
         image_path = line['image_path']
         question = line['question']
 
+        model_type = get_model_type(model_name)
+
         # Build message with image and query
         msgs = []
         if os.path.exists(image_path):
             msgs.append(dict(type='image', value=image_path))
 
-        # Add pointing instruction
-        prompt_text = f"{question}\nPoint to the relevant location(s)."
+        if model_type == 'molmo':
+            prompt_text = f"{question}\nPoint to the relevant location(s)."
+        elif model_type == 'qwen':
+            prompt_text = f"{question}\nOutput the coordinates in XML format <points x y>object</points>."
+        else:
+            # llava, internvl, phi4
+            prompt_text = (
+                f"{question}\n"
+                "Give EXACT PIXEL COORDINATES in [x, y] format, "
+                "where x is horizontal and y is vertical. "
+                "ONLY return coordinates with no additional text."
+            )
+
         msgs.append(dict(type='text', value=prompt_text))
 
         return msgs

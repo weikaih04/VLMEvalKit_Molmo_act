@@ -100,15 +100,18 @@ class OpenEQADataset(VideoBaseDataset):
             frames_path = os.path.join(self.data_root, "frames", rel_path)
             video_path = os.path.join(self.data_root, "videos", rel_path + ".mp4")
 
-            # Only include samples with valid frame folders
-            if not os.path.exists(frames_path):
+            # Include samples that have either frames OR video
+            has_frames = os.path.exists(frames_path)
+            has_video = os.path.exists(video_path)
+
+            if not has_frames and not has_video:
                 continue
 
             data_list.append({
                 'index': idx_counter,
                 'episode_history': rel_path,
-                'frames_path': frames_path,
-                'video_path': video_path if os.path.exists(video_path) else None,
+                'frames_path': frames_path if has_frames else None,
+                'video_path': video_path if has_video else None,
                 'question': question,
                 'answer': gt_answer,
             })
@@ -118,9 +121,10 @@ class OpenEQADataset(VideoBaseDataset):
 
         if len(self.data) > 0:
             num_with_video = self.data['video_path'].notna().sum()
-            print(f"OpenEQA: Loaded {len(self.data)} samples ({num_with_video} with video files)")
+            num_with_frames = self.data['frames_path'].notna().sum()
+            print(f"OpenEQA: Loaded {len(self.data)} samples ({num_with_video} with video, {num_with_frames} with frames)")
         else:
-            print(f"Warning: No valid frame folders found in {os.path.join(self.data_root, 'frames')}")
+            print(f"Warning: No valid data found in {self.data_root}")
 
     def __len__(self):
         return len(self.data)

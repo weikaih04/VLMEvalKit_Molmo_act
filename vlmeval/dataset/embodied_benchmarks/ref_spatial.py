@@ -8,13 +8,15 @@ RefSpatial-Bench is a pointing benchmark for spatial referring.
 - Evaluation: Accuracy (point in mask)
 """
 
+import os
 import numpy as np
 import pandas as pd
 from PIL import Image
 from datasets import load_dataset
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import extract_molmo_points, check_point_in_mask
+from .utils import extract_molmo_points, extract_points_robust, check_point_in_mask, format_pointing_prompt
+from . import EMBODIED_DATA_ROOT
 
 
 class RefSpatialBenchDataset(ImageBaseDataset):
@@ -36,6 +38,10 @@ class RefSpatialBenchDataset(ImageBaseDataset):
 
     def __init__(self, dataset='RefSpatial_Embodied', **kwargs):
         self.dataset_name = dataset
+
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'refspatial', 'images')
+        os.makedirs(self.img_root, exist_ok=True)
 
         # Determine splits to load
         if 'location' in dataset.lower():
@@ -62,10 +68,19 @@ class RefSpatialBenchDataset(ImageBaseDataset):
                 continue
 
             for item in hf_dataset:
+                # Save image to disk
+                img_path = os.path.join(self.img_root, f'{split}_{idx_counter:06d}.jpg')
+                if not os.path.exists(img_path):
+                    try:
+                        item['image'].convert('RGB').save(img_path, 'JPEG')
+                    except Exception:
+                        idx_counter += 1
+                        continue
+
                 data_list.append({
                     'index': idx_counter,
                     'split': split,
-                    'image': item['image'],
+                    'image_path': img_path,
                     'mask': item['mask'],
                     'object': item['object'],
                     'image_width': item['image'].width,
@@ -83,24 +98,23 @@ class RefSpatialBenchDataset(ImageBaseDataset):
         return {
             'index': item['index'],
             'split': item['split'],
-            'image': item['image'],
+            'image_path': item['image_path'],
             'mask': item['mask'],
             'object': item['object'],
         }
 
-    def build_prompt(self, line):
-        """Build pointing prompt."""
+    def build_prompt(self, line, model_name=None):
+        """Build pointing prompt with model-specific format."""
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        image = line['image']
+        image_path = line['image_path']
         obj = line['object']
 
-        # Standard pointing prompt
-        prompt = f"Point to the {obj}."
+        prompt = format_pointing_prompt(f"the {obj}", model_name)
 
         msgs = [
-            dict(type='image', value=image),
+            dict(type='image', value=image_path),
             dict(type='text', value=prompt),
         ]
         return msgs
@@ -108,7 +122,7 @@ class RefSpatialBenchDataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['image']
+        return line['image_path']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate pointing predictions.

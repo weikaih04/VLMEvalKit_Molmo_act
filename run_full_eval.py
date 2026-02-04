@@ -30,6 +30,11 @@ from tqdm import tqdm
 
 from vlmeval.dataset import build_dataset
 from vlmeval.vlm import Molmo2
+from vlmeval.vlm.llava import LLaVA_OneVision_HF
+from vlmeval.vlm.qwen2_vl import Qwen2VLChat
+from vlmeval.vlm.qwen3_vl import Qwen3VLChat
+from vlmeval.vlm.phi4_multimodal import Phi4Multimodal
+from vlmeval.vlm.internvl import InternVLChat
 from vlmeval.dataset.embodied_benchmarks.utils.point_extraction import (
     extract_molmo_points, extract_points_robust, check_point_in_mask
 )
@@ -257,7 +262,7 @@ def evaluate_sample(pred: str, item: dict, eval_type: str):
         return evaluate_mcq(pred, str(item.get('answer', '')))
 
 
-def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size: int = 16):
+def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size: int = 16, model_name: str = None):
     """Run evaluation on a single benchmark with vLLM continuous batching."""
     print(f"\n{'='*60}")
     print(f"Evaluating: {benchmark_name}")
@@ -275,7 +280,7 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
     print(f"Evaluation type: {eval_type}")
 
     # Check if model supports batch generation (vLLM with continuous batching)
-    has_batch = hasattr(model, 'generate_batch') and model.use_vllm
+    has_batch = hasattr(model, 'generate_batch') and getattr(model, 'use_vllm', False)
 
     if has_batch:
         # Prepare all prompts at once, let vLLM handle continuous batching
@@ -299,12 +304,18 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
         # Video decoding releases GIL in OpenCV/decord, so ThreadPool works
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        # Check if model supports video input via type='video' (not all models do)
+        # Models with VIDEO_LLM=True support type='video', others expect frames as type='image'
+        model_supports_video_type = getattr(model, 'VIDEO_LLM', False)
+
         def build_prompt_for_idx(idx):
             try:
                 item = ds.data.iloc[idx]
-                # Video benchmarks require video_llm parameter
-                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower():
-                    prompt = ds.build_prompt(item, video_llm=True)
+                # Video benchmarks: use video_llm=True only if model supports type='video'
+                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower() or 'cosmosreason' in benchmark_name.lower():
+                    prompt = ds.build_prompt(item, video_llm=model_supports_video_type)
+                elif eval_type == 'pointing':
+                    prompt = ds.build_prompt(item, model_name=model_name)
                 else:
                     prompt = ds.build_prompt(item)
                 return idx, prompt, None
@@ -326,10 +337,22 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
         valid_indices = [j for j, p in enumerate(all_prompts) if p is not None]
         valid_prompts = [all_prompts[j] for j in valid_indices]
 
+        # Debug: print first prompt structure (commented out)
+        # if valid_prompts:
+        #     first_prompt = valid_prompts[0]
+        #     types = [item.get('type', 'unknown') for item in first_prompt]
+        #     print(f"[DEBUG] First prompt types: {types}")
+
         # Generate in chunks for progress tracking and error recovery
         # With VLLM_ENABLE_V1_MULTIPROCESSING=0, larger chunks are fine
-        chunk_size = len(valid_prompts)  # Process all at once; vLLM handles batching internally
         print(f"Running inference on {len(valid_prompts)} samples...")
+
+        # Handle empty dataset case
+        if len(valid_prompts) == 0:
+            print(f"Warning: No valid samples to process for {benchmark_name}")
+            return {'benchmark': benchmark_name, 'accuracy': 0.0, 'total': 0, 'correct': 0}
+
+        chunk_size = len(valid_prompts)  # Process all at once; vLLM handles batching internally
 
         preds = []
         for chunk_start in tqdm(range(0, len(valid_prompts), chunk_size), desc="Inference chunks"):
@@ -391,12 +414,17 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
         total = 0
         is_vsibench = (eval_type == 'vsibench')
 
+        # Check if model supports video input via type='video'
+        model_supports_video_type = getattr(model, 'VIDEO_LLM', False)
+
         for i in tqdm(range(total_samples), desc=f"Processing {benchmark_name}"):
             try:
                 item = ds.data.iloc[i]
-                # Video benchmarks require video_llm parameter
-                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower():
-                    prompt = ds.build_prompt(item, video_llm=True)
+                # Video benchmarks: use video_llm=True only if model supports type='video'
+                if 'vsibench' in benchmark_name.lower() or 'openeqa' in benchmark_name.lower() or 'cosmosreason' in benchmark_name.lower():
+                    prompt = ds.build_prompt(item, video_llm=model_supports_video_type)
+                elif eval_type == 'pointing':
+                    prompt = ds.build_prompt(item, model_name=model_name)
                 else:
                     prompt = ds.build_prompt(item)
 
@@ -464,8 +492,7 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
 def main():
     parser = argparse.ArgumentParser(description='Run full evaluation on embodied benchmarks')
     parser.add_argument('--model', type=str, default='Molmo2-4B',
-                        choices=['Molmo2-4B', 'Molmo2-8B', 'molmo2-4-spatial-tuning-v1-1k', 'molmo2-4-spatial-tuning-v1-4k'],
-                        help='Model to evaluate')
+                        help='Model to evaluate. Supported: Molmo2-4B, Molmo2-8B, LLaVA-OneVision-0.5B, LLaVA-OneVision-7B, Qwen2.5-VL-3B, Qwen2.5-VL-7B, Qwen3-VL-4B, Phi4-Multimodal, etc.')
     parser.add_argument('--benchmarks', nargs='+', default=None,
                         help='Specific benchmarks to run (default: all)')
     parser.add_argument('--output', type=str, default='results',
@@ -481,16 +508,66 @@ def main():
     output_dir = Path(args.output) / f"{args.model}_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize model
-    print(f"Initializing {args.model} with vLLM...")
-    # Handle local checkpoints vs HuggingFace models
-    if args.model == 'molmo2-4-spatial-tuning-v1-1k':
-        model_path = "/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint"
-    elif args.model == 'molmo2-4-spatial-tuning-v1-4k':
-        model_path = "/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint_4k"
+    # Initialize model based on model name
+    print(f"Initializing {args.model}...")
+
+    # Model configuration mapping
+    MODEL_CONFIGS = {
+        # Molmo2 models
+        'Molmo2-4B': ('molmo2', 'allenai/Molmo2-4B'),
+        'Molmo2-8B': ('molmo2', 'allenai/Molmo2-8B'),
+        'molmo2-4-spatial-tuning-v1-1k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint'),
+        'molmo2-4-spatial-tuning-v1-4k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint_4k'),
+        'molmo2-4b-spatial-v3-2k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-2k'),
+        'molmo2-4b-spatial-v3-7k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-7k'),
+        # LLaVA-OneVision models (HuggingFace version)
+        'LLaVA-OneVision-0.5B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-0.5b-ov-hf'),
+        'LLaVA-OneVision-7B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-7b-ov-hf'),
+        'LLaVA-OneVision-72B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-72b-ov-hf'),
+        # Qwen2.5-VL models
+        'Qwen2.5-VL-3B': ('qwen2-vl', 'Qwen/Qwen2.5-VL-3B-Instruct'),
+        'Qwen2.5-VL-7B': ('qwen2-vl', 'Qwen/Qwen2.5-VL-7B-Instruct'),
+        'Qwen2.5-VL-72B': ('qwen2-vl', 'Qwen/Qwen2.5-VL-72B-Instruct'),
+        # Qwen3-VL models
+        'Qwen3-VL-4B': ('qwen3-vl', 'Qwen/Qwen3-VL-4B-Instruct'),
+        'Qwen3-VL-8B': ('qwen3-vl', 'Qwen/Qwen3-VL-8B-Instruct'),
+        # Phi4 models
+        'Phi4-Multimodal': ('phi4', 'microsoft/Phi-4-multimodal-instruct'),
+        # InternVL3 models (matches config.py)
+        'InternVL3-1B': ('internvl', 'OpenGVLab/InternVL3-1B'),
+        'InternVL3-2B': ('internvl', 'OpenGVLab/InternVL3-2B'),
+        'InternVL3-8B': ('internvl', 'OpenGVLab/InternVL3-8B'),
+        # InternVL3.5 models (matches config.py, uses underscore in HF path)
+        'InternVL3_5-1B': ('internvl', 'OpenGVLab/InternVL3_5-1B'),
+        'InternVL3_5-2B': ('internvl', 'OpenGVLab/InternVL3_5-2B'),
+        'InternVL3_5-4B': ('internvl', 'OpenGVLab/InternVL3_5-4B'),
+        'InternVL3_5-8B': ('internvl', 'OpenGVLab/InternVL3_5-8B'),
+    }
+
+    if args.model not in MODEL_CONFIGS:
+        print(f"Warning: Model '{args.model}' not in predefined configs.")
+        print(f"Available models: {list(MODEL_CONFIGS.keys())}")
+        print("Attempting to use model name as HuggingFace path for Molmo2...")
+        model_type, model_path = 'molmo2', args.model
     else:
-        model_path = f"allenai/{args.model}"
-    model = Molmo2(model_path=model_path, use_vllm=True, max_new_tokens=args.max_new_tokens)
+        model_type, model_path = MODEL_CONFIGS[args.model]
+
+    # Instantiate the appropriate model class
+    if model_type == 'molmo2':
+        model = Molmo2(model_path=model_path, use_vllm=True, max_new_tokens=args.max_new_tokens)
+    elif model_type == 'llava-onevision':
+        model = LLaVA_OneVision_HF(model_path=model_path, max_new_tokens=args.max_new_tokens)
+    elif model_type == 'qwen2-vl':
+        model = Qwen2VLChat(model_path=model_path, max_new_tokens=args.max_new_tokens)
+    elif model_type == 'qwen3-vl':
+        model = Qwen3VLChat(model_path=model_path, max_new_tokens=args.max_new_tokens)
+    elif model_type == 'phi4':
+        model = Phi4Multimodal(model_path=model_path)
+    elif model_type == 'internvl':
+        model = InternVLChat(model_path=model_path, version='V2.0', max_new_tokens=args.max_new_tokens)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
     print("Model initialized!")
 
     # Determine benchmarks to run
@@ -502,7 +579,7 @@ def main():
     start_time = time.time()
 
     for benchmark in benchmarks:
-        result = run_benchmark(model, benchmark, str(output_dir), args.batch_size)
+        result = run_benchmark(model, benchmark, str(output_dir), args.batch_size, model_name=args.model)
         if result:
             all_results.append(result)
 

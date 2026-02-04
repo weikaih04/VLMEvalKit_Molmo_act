@@ -7,11 +7,13 @@ BLINK is a visual perception benchmark with 14 subtasks.
 - Evaluation: Exact match, average over subtasks
 """
 
+import os
 import pandas as pd
 from datasets import load_dataset
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
 from .utils import extract_answer_letter
+from . import EMBODIED_DATA_ROOT
 
 
 # All 14 BLINK subtasks
@@ -54,6 +56,10 @@ class BLINKDataset(ImageBaseDataset):
         self.dataset_name = dataset
         self.split = split
 
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'blink', 'images')
+        os.makedirs(self.img_root, exist_ok=True)
+
         # Determine which subtasks to load
         if dataset == 'BLINK_Embodied':
             self.subtasks = BLINK_SUBTASKS
@@ -85,13 +91,21 @@ class BLINKDataset(ImageBaseDataset):
                     continue
 
             for item in hf_dataset:
-                # Collect images (up to 4)
-                images = []
-                for k in ['image_1', 'image_2', 'image_3', 'image_4']:
+                # Collect images (up to 4) and save to disk
+                image_paths = []
+                for img_idx, k in enumerate(['image_1', 'image_2', 'image_3', 'image_4']):
                     if k in item and item[k] is not None:
-                        images.append(item[k])
+                        img = item[k]
+                        img_path = os.path.join(self.img_root, f'{task_name}_{idx_counter}_{img_idx}.jpg')
+                        if not os.path.exists(img_path):
+                            try:
+                                if hasattr(img, 'save'):
+                                    img.convert('RGB').save(img_path, 'JPEG')
+                            except Exception:
+                                continue
+                        image_paths.append(img_path)
 
-                if not images:
+                if not image_paths:
                     continue
 
                 # Get prompt and answer
@@ -103,7 +117,7 @@ class BLINKDataset(ImageBaseDataset):
                     'index': idx_counter,
                     'idx': item.get('idx', str(idx_counter)),
                     'subtask': task_name,
-                    'images': images,
+                    'image_paths': image_paths,
                     'question': prompt,
                     'choices': choices,
                     'answer': answer,
@@ -121,7 +135,7 @@ class BLINKDataset(ImageBaseDataset):
             'index': item['index'],
             'idx': item['idx'],
             'subtask': item['subtask'],
-            'images': item['images'],
+            'image_paths': item['image_paths'],
             'question': item['question'],
             'answer': item['answer'],
         }
@@ -131,13 +145,13 @@ class BLINKDataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        images = line['images']
+        image_paths = line['image_paths']
         prompt = line['question']  # Pre-formatted with options
 
-        # Build message: [IMG1, IMG2, ..., TEXT]
+        # Build message: [IMG1, IMG2, ..., TEXT] (pass file paths, not PIL objects)
         msgs = []
-        for img in images:
-            msgs.append(dict(type='image', value=img))
+        for img_path in image_paths:
+            msgs.append(dict(type='image', value=img_path))
         msgs.append(dict(type='text', value=prompt))
 
         return msgs
@@ -145,7 +159,7 @@ class BLINKDataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['images']
+        return line['image_paths']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate predictions.

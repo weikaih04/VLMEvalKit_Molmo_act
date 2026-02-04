@@ -59,15 +59,14 @@ class MindCubeDataset(ImageBaseDataset):
             gt_answer = item['gt_answer']  # Single letter like "C"
             img_paths = item['images']  # List of relative paths
 
-            # Load images
-            images = self._load_images(data_dir, img_paths)
-            if not images:
+            # Get full image paths (pass paths, not PIL objects)
+            full_image_paths = self._get_image_paths(data_dir, img_paths)
+            if not full_image_paths:
                 continue
 
             data_list.append({
                 'index': idx,
-                'images': images,
-                'image_paths': img_paths,
+                'image_paths': full_image_paths,
                 'question': question,
                 'answer': gt_answer,  # Single letter
             })
@@ -75,18 +74,14 @@ class MindCubeDataset(ImageBaseDataset):
         self.data = pd.DataFrame(data_list)
         self.data_dir = data_dir
 
-    def _load_images(self, data_dir, image_paths):
-        """Load images from relative paths."""
-        images = []
+    def _get_image_paths(self, data_dir, image_paths):
+        """Get full paths for images (verify they exist)."""
+        full_paths = []
         for path in image_paths:
             full_path = os.path.join(data_dir, path)
             if os.path.exists(full_path):
-                try:
-                    img = Image.open(full_path).convert("RGB")
-                    images.append(img)
-                except Exception:
-                    pass
-        return images
+                full_paths.append(full_path)
+        return full_paths
 
     def __len__(self):
         return len(self.data)
@@ -95,7 +90,7 @@ class MindCubeDataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'images': item['images'],
+            'image_paths': item['image_paths'],
             'question': item['question'],
             'answer': item['answer'],
         }
@@ -105,16 +100,16 @@ class MindCubeDataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        images = line['images']
+        image_paths = line['image_paths']
         question = line['question']
 
         # MindCube questions usually include options text
         prompt = f"{question}\nAnswer with the option letter."
 
-        # Build message: [IMG, IMG, IMG, IMG, TEXT]
+        # Build message: [IMG, IMG, IMG, IMG, TEXT] (pass file paths, not PIL objects)
         msgs = []
-        for img in images:
-            msgs.append(dict(type='image', value=img))
+        for img_path in image_paths:
+            msgs.append(dict(type='image', value=img_path))
         msgs.append(dict(type='text', value=prompt))
 
         return msgs
@@ -122,7 +117,7 @@ class MindCubeDataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['images']
+        return line['image_paths']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate predictions."""

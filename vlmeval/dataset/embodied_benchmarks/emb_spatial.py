@@ -8,11 +8,13 @@ EmbSpatial-Bench is a spatial understanding benchmark.
 - Evaluation: Exact match of answer letter
 """
 
+import os
 import pandas as pd
 from datasets import load_dataset
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
 from .utils import extract_answer_letter, index_to_letter, build_mcq_prompt
+from . import EMBODIED_DATA_ROOT
 
 
 class EmbSpatialBenchDataset(ImageBaseDataset):
@@ -30,10 +32,13 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
 
     def __init__(self, dataset='EmbSpatial_Embodied', **kwargs):
         self.dataset_name = dataset
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'emb_spatial', 'images')
+        os.makedirs(self.img_root, exist_ok=True)
         self._load_hf_dataset()
 
     def _load_hf_dataset(self):
-        """Load dataset from HuggingFace."""
+        """Load dataset from HuggingFace and save images to disk."""
         dataset_path = "FlagEval/EmbSpatial-Bench"
 
         try:
@@ -48,9 +53,14 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
             gt_index = item['answer']
             gt_letter = index_to_letter(gt_index)
 
+            # Save image to disk (models expect file paths, not PIL objects)
+            image_path = os.path.join(self.img_root, f'{idx:06d}.jpg')
+            if not os.path.exists(image_path):
+                item['image'].save(image_path)
+
             data_list.append({
                 'index': idx,
-                'image': item['image'],
+                'image_path': image_path,
                 'question': item['question'],
                 'options': item['answer_options'],  # List of options
                 'answer_index': gt_index,
@@ -67,7 +77,7 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'image': item['image'],
+            'image_path': item['image_path'],
             'question': item['question'],
             'options': item['options'],
             'answer': item['answer'],
@@ -78,7 +88,7 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        image = line['image']
+        image_path = line['image_path']
         question = line['question']
         options = line['options']
 
@@ -86,7 +96,7 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
         prompt = build_mcq_prompt(question, options)
 
         msgs = [
-            dict(type='image', value=image),
+            dict(type='image', value=image_path),
             dict(type='text', value=prompt),
         ]
         return msgs
@@ -94,7 +104,7 @@ class EmbSpatialBenchDataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['image']
+        return [line['image_path']]
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate predictions."""

@@ -13,6 +13,56 @@ from PIL import Image
 from typing import List, Tuple, Optional, Union
 
 
+def get_model_type(model_name: str) -> str:
+    """Map model name to model type for prompt/parsing selection.
+
+    Returns one of: 'molmo', 'qwen', 'llava', 'internvl', 'phi4'
+    """
+    if model_name is None:
+        return 'molmo'
+    name = model_name.lower()
+    if 'molmo' in name:
+        return 'molmo'
+    elif 'qwen' in name:
+        return 'qwen'
+    elif 'llava' in name:
+        return 'llava'
+    elif 'internvl' in name or 'intern_vl' in name:
+        return 'internvl'
+    elif 'phi4' in name or 'phi-4' in name:
+        return 'phi4'
+    return 'molmo'
+
+
+def format_pointing_prompt(description: str, model_name: str = None) -> str:
+    """Generate model-specific pointing prompt.
+
+    Args:
+        description: The object or task description (e.g., "the red cup").
+        model_name: Model name to determine prompt format.
+
+    Returns:
+        Full prompt string appropriate for the model.
+    """
+    model_type = get_model_type(model_name)
+
+    if model_type == 'molmo':
+        return f"Point to {description}."
+    elif model_type == 'qwen':
+        return (
+            f"{description}\n"
+            "Output its coordinates in XML format <points x y>object</points>."
+        )
+    else:
+        # llava, internvl, phi4 - use pixel coordinate format
+        return (
+            f"{description}\n"
+            "Give EXACT PIXEL COORDINATES in [x, y] format, "
+            "where x is horizontal and y is vertical. "
+            "ONLY return coordinates with no additional text."
+        )
+
+
 def extract_molmo_points(text: str) -> List[Tuple[float, float]]:
     """
     Extract points from Molmo v2 coords="frame_idx point_idx x y ..." format.
@@ -81,6 +131,89 @@ def extract_molmo_points(text: str) -> List[Tuple[float, float]]:
                 points.append((x, y))
             except (ValueError, IndexError):
                 continue
+
+    return points
+
+
+def extract_qwen_xml_points(text: str, img_width: int = 0, img_height: int = 0) -> List[Tuple[float, float]]:
+    """
+    Extract points from Qwen2.5-VL/Qwen3-VL XML format.
+
+    Qwen outputs: <points x1="450" y1="320">object</points>
+    or: <points 450 320>object</points>
+
+    Coordinates are in pixel space. Converted to 0-100 scale using image dimensions.
+    If image dimensions are not provided, auto-scales based on magnitude.
+
+    Returns points in 0-100 scale (percentage).
+    """
+    points = []
+
+    # Pattern 1: <points x1="450" y1="320">
+    pattern_attr = r'<points\s+x1?=["\']?(\d+\.?\d*)["\']?\s+y1?=["\']?(\d+\.?\d*)["\']?'
+    for match in re.finditer(pattern_attr, text):
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            if img_width > 0 and img_height > 0:
+                x = (x / img_width) * 100.0
+                y = (y / img_height) * 100.0
+            elif x > 100.0 or y > 100.0:
+                x = x / 10.0
+                y = y / 10.0
+            points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    if points:
+        return points
+
+    # Pattern 2: <points 450 320>object</points>
+    pattern_direct = r'<points\s+(\d+\.?\d*)\s+(\d+\.?\d*)>.*?</points>'
+    for match in re.finditer(pattern_direct, text):
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            if img_width > 0 and img_height > 0:
+                x = (x / img_width) * 100.0
+                y = (y / img_height) * 100.0
+            elif x > 100.0 or y > 100.0:
+                x = x / 10.0
+                y = y / 10.0
+            points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    return points
+
+
+def extract_bracket_points(text: str, img_width: int = 0, img_height: int = 0) -> List[Tuple[float, float]]:
+    """
+    Extract points from bracket format: [x, y].
+
+    Used by LLaVA-OneVision, InternVL, Phi4, etc.
+    Coordinates are in pixel space. Converted to 0-100 scale using image dimensions.
+
+    Returns points in 0-100 scale (percentage).
+    """
+    points = []
+    pattern = r'\[\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*\]'
+    for match in re.finditer(pattern, text):
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            if img_width > 0 and img_height > 0:
+                x = (x / img_width) * 100.0
+                y = (y / img_height) * 100.0
+            elif x > 100.0 or y > 100.0:
+                x = x / 10.0
+                y = y / 10.0
+            elif x <= 1.0 and y <= 1.0:
+                x = x * 100.0
+                y = y * 100.0
+            points.append((x, y))
+        except (ValueError, IndexError):
+            continue
 
     return points
 
@@ -218,21 +351,25 @@ def extract_xy_attribute_points(text: str) -> List[Tuple[float, float]]:
     return points
 
 
-def extract_points_robust(text: str) -> List[Tuple[float, float]]:
+def extract_points_robust(text: str, img_width: int = 0, img_height: int = 0) -> List[Tuple[float, float]]:
     """
     Robust point extraction using multiple strategies.
 
     Tries in order:
     1. Molmo v2 coords format (coords="prefix x y")
     2. Molmo v1 format (p=xxx,yyy)
-    3. Click format (Click(x,y))
-    4. xy attribute format (x="x" y="y")
-    5. Python tuple format ((x, y))
+    3. Qwen XML format (<points x y>obj</points>)
+    4. Bracket format ([x, y])
+    5. Click format (Click(x,y))
+    6. xy attribute format (x="x" y="y")
+    7. Python tuple format ((x, y))
 
     Returns points in 0-100 scale (percentage).
 
     Args:
         text: Generated text that may contain point coordinates
+        img_width: Image width in pixels (for pixel→percentage conversion)
+        img_height: Image height in pixels (for pixel→percentage conversion)
 
     Returns:
         List of (x, y) tuples in 0-100 scale
@@ -247,17 +384,27 @@ def extract_points_robust(text: str) -> List[Tuple[float, float]]:
     if points:
         return points
 
-    # Strategy C: Try Click format
+    # Strategy C: Try Qwen XML format
+    points = extract_qwen_xml_points(text, img_width, img_height)
+    if points:
+        return points
+
+    # Strategy D: Try bracket format [x, y]
+    points = extract_bracket_points(text, img_width, img_height)
+    if points:
+        return points
+
+    # Strategy E: Try Click format
     points = extract_click_format_points(text)
     if points:
         return points
 
-    # Strategy D: Try xy attribute format
+    # Strategy F: Try xy attribute format
     points = extract_xy_attribute_points(text)
     if points:
         return points
 
-    # Strategy E: Try Python tuple format
+    # Strategy G: Try Python tuple format
     points = extract_python_tuple_points(text)
     if points:
         return points

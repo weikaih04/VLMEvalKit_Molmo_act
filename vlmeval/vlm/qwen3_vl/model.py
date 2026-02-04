@@ -146,14 +146,27 @@ class Qwen3VLChat(Qwen3VLPromptMixin, BaseModel):
                 trust_remote_code=True,
             )
         else:
+            # Try flash_attention_2 first, fall back to sdpa if not available
             if listinstr(['omni'], model_path.lower()):
-                self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-                    model_path, dtype='auto', device_map='auto', attn_implementation='flash_attention_2'
-                )
+                try:
+                    self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+                        model_path, dtype='auto', device_map='auto', attn_implementation='flash_attention_2'
+                    )
+                except ImportError:
+                    logging.warning("flash_attn not installed, falling back to sdpa attention")
+                    self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+                        model_path, dtype='auto', device_map='auto', attn_implementation='sdpa'
+                    )
             else:
-                self.model = AutoModelForImageTextToText.from_pretrained(
-                    model_path, torch_dtype='auto', device_map='auto', attn_implementation='flash_attention_2'
-                )
+                try:
+                    self.model = AutoModelForImageTextToText.from_pretrained(
+                        model_path, torch_dtype='auto', device_map='auto', attn_implementation='flash_attention_2'
+                    )
+                except ImportError:
+                    logging.warning("flash_attn not installed, falling back to sdpa attention")
+                    self.model = AutoModelForImageTextToText.from_pretrained(
+                        model_path, torch_dtype='auto', device_map='auto', attn_implementation='sdpa'
+                    )
             self.model.eval()
 
         torch.cuda.empty_cache()

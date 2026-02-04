@@ -322,9 +322,17 @@ def DATASET_MODALITY(dataset, *, default: str = 'IMAGE') -> str:
         assert np.all([x == MODALITIES[0] for x in MODALITIES]), (dataset_list, MODALITIES)
         return MODALITIES[0]
 
-    if 'VIDEO' in dataset.lower():
+    # Check for known video datasets by name pattern
+    # These are video benchmarks that may have frame suffix (e.g., vsibench_32frame)
+    video_dataset_patterns = ['vsibench', 'openeqa', 'cosmosreason']
+    dataset_lower = dataset.lower()
+    for pattern in video_dataset_patterns:
+        if pattern in dataset_lower:
+            return 'VIDEO'
+
+    if 'VIDEO' in dataset_lower:
         return 'VIDEO'
-    elif 'IMAGE' in dataset.lower():
+    elif 'IMAGE' in dataset_lower:
         return 'IMAGE'
     warnings.warn(f'Dataset {dataset} is a custom one, will treat modality as {default}. ')
     return default

@@ -34,13 +34,19 @@ def infer_data_api(model, work_dir, model_name, dataset, index_set=None, api_npr
     lt, indices = len(data), list(data['index'])
 
     structs = []
+    is_video_llm = getattr(model, 'VIDEO_LLM', False)
+    is_video_dataset = getattr(dataset, 'MODALITY', '') == 'VIDEO'
     for i in range(lt):
         item = data.iloc[i]
         if hasattr(model, 'use_custom_prompt') and model.use_custom_prompt(dataset_name):
             assert hasattr(model, 'build_prompt')
             struct = model.build_prompt(item, dataset=dataset_name)
         else:
-            struct = dataset.build_prompt(item)
+            # Pass video_llm=True if model supports video input and dataset accepts it
+            if is_video_llm and is_video_dataset:
+                struct = dataset.build_prompt(item, video_llm=True)
+            else:
+                struct = dataset.build_prompt(item)
         structs.append(struct)
 
     out_file = f'{work_dir}/{model_name}_{dataset_name}_supp.pkl'
@@ -153,7 +159,13 @@ def infer_data(model, model_name, work_dir, dataset, out_file, verbose=False, ap
         if hasattr(model, 'use_custom_prompt') and model.use_custom_prompt(dataset_name):
             struct = model.build_prompt(data.iloc[i], dataset=dataset_name)
         else:
-            struct = dataset.build_prompt(data.iloc[i])
+            # Pass video_llm=True if model supports video input and dataset accepts it
+            is_video_llm = getattr(model, 'VIDEO_LLM', False)
+            is_video_dataset = getattr(dataset, 'MODALITY', '') == 'VIDEO'
+            if is_video_llm and is_video_dataset:
+                struct = dataset.build_prompt(data.iloc[i], video_llm=True)
+            else:
+                struct = dataset.build_prompt(data.iloc[i])
 
         # If `SKIP_ERR` flag is set, the model will skip the generation if error is encountered
         if os.environ.get('SKIP_ERR', False) == '1':

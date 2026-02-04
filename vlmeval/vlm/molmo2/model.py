@@ -51,6 +51,7 @@ class Molmo2(BaseModel):
         self.use_vllm = use_vllm
         self.mm_olmo_path = mm_olmo_path
         self.max_new_tokens = kwargs.get('max_new_tokens', 200)
+        self.max_video_frames = kwargs.get('max_video_frames', 32)  # Max frames for video
         self.kwargs = kwargs
 
         if self.use_vllm:
@@ -266,9 +267,22 @@ class Molmo2(BaseModel):
         if videos:
             # For vLLM, we need to load video frames
             # Use decord or opencv to extract frames
-            video_frames = self._load_video_frames(videos[0])
+            video_frames = self._load_video_frames(videos[0], max_frames=self.max_video_frames)
             if video_frames:
-                mm_data['video'] = video_frames
+                # vLLM expects "video" (singular) with list of (frames, metadata) tuples
+                mm_data['video'] = [video_frames]
+
+        # Debug: print mm_data keys and shapes (commented out)
+        # if mm_data:
+        #     debug_info = []
+        #     for k, v in mm_data.items():
+        #         if k == 'video' and v:
+        #             frames, meta = v[0]
+        #             debug_info.append(f"video: frames.shape={frames.shape}")
+        #         elif k == 'image' and v:
+        #             debug_info.append(f"image: count={len(v)}")
+        #     if debug_info and len(debug_info) > 0:
+        #         print(f"[DEBUG mm_data] {', '.join(debug_info)}")
 
         return {
             'prompt': prompt,
@@ -284,14 +298,15 @@ class Molmo2(BaseModel):
             with open(video_path, 'rb') as f:
                 video_bytes = f.read()
 
-            # Use official implementation
-            # frame_sample_mode=None means load all frames and let hf processor sample
-            # do_sample_frames=True will be set in metadata
+            # Use official implementation with uniform sampling
+            # frame_sample_mode="uniform_last_frame" samples exactly max_frames frames
+            # This avoids loading all frames which can cause OOM or exceed image limits
             frames, metadata = Molmo2VideoBackend.load_bytes(
                 video_bytes,
                 backend="decord",
-                frame_sample_mode=None,  # Let processor handle sampling
+                frame_sample_mode="uniform_last_frame",  # Sample uniformly to max_frames
                 num_frames=max_frames,
+                max_fps=8,  # Max 8 fps for sampling
             )
             return (frames, metadata)
         except Exception as e:
@@ -347,7 +362,7 @@ class Molmo2(BaseModel):
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             future_to_idx = {executor.submit(self._prepare_vllm_input, msg): i
                            for i, msg in enumerate(messages)}
-            for future in tqdm(as_completed(future_to_idx), total=len(messages), desc="Loading videos"):
+            for future in tqdm(as_completed(future_to_idx), total=len(messages), desc="Loading media"):
                 idx = future_to_idx[future]
                 try:
                     vllm_inputs[idx] = future.result()

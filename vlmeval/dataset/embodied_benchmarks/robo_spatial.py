@@ -10,6 +10,7 @@ RoboSpatial-Home has two evaluation modes:
 - VQA splits: ["configuration", "compatibility"]
 """
 
+import os
 import re
 import numpy as np
 import pandas as pd
@@ -17,21 +18,18 @@ from PIL import Image
 from datasets import load_dataset, concatenate_datasets
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import extract_molmo_points, extract_points_robust, check_point_in_mask, normalize_text
+from .utils import extract_molmo_points, extract_points_robust, check_point_in_mask, normalize_text, format_pointing_prompt, get_model_type
+from . import EMBODIED_DATA_ROOT
 
 
-def convert_to_molmo_prompt(original_question: str) -> str:
+def convert_pointing_prompt(original_question: str, model_name: str = None) -> str:
     """
-    Remove the output format requirement and add pointing instruction.
+    Remove the output format requirement and add model-specific pointing instruction.
 
     Original format:
     "In the image, there is a bowl. Pinpoint several points within the
     vacant space situated to the left of the bowl. Your answer should
     be formatted as a list of tuples, i.e. [(x1, y1), ...]..."
-
-    Converted:
-    "In the image, there is a bowl. Pinpoint several points within the
-    vacant space situated to the left of the bowl. Point to the areas that the prompt asked."
     """
     # Remove the format requirement part
     cleaned = re.sub(
@@ -39,9 +37,21 @@ def convert_to_molmo_prompt(original_question: str) -> str:
         '',
         original_question,
         flags=re.IGNORECASE | re.DOTALL
-    )
-    # Add pointing instruction to trigger Molmo's pointing mode
-    return cleaned.strip() + " Point to the areas that the prompt asked."
+    ).strip()
+
+    model_type = get_model_type(model_name)
+
+    if model_type == 'molmo':
+        return cleaned + " Point to the areas that the prompt asked."
+    elif model_type == 'qwen':
+        return cleaned + "\nOutput the coordinates in XML format <points x y>object</points>."
+    else:
+        # llava, internvl, phi4
+        return (
+            cleaned + "\nGive EXACT PIXEL COORDINATES in [x, y] format, "
+            "where x is horizontal and y is vertical. "
+            "ONLY return coordinates with no additional text."
+        )
 
 
 class RoboSpatialPointingDataset(ImageBaseDataset):
@@ -60,6 +70,9 @@ class RoboSpatialPointingDataset(ImageBaseDataset):
     def __init__(self, dataset='RoboSpatial_Pointing', **kwargs):
         self.dataset_name = dataset
         self.splits = ['context']
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'robospatial', 'pointing_images')
+        os.makedirs(self.img_root, exist_ok=True)
         self._load_hf_dataset()
 
     def _load_hf_dataset(self):
@@ -85,9 +98,17 @@ class RoboSpatialPointingDataset(ImageBaseDataset):
 
         data_list = []
         for idx, item in enumerate(hf_dataset):
+            # Save image to disk
+            img_path = os.path.join(self.img_root, f'{idx:06d}.jpg')
+            if not os.path.exists(img_path):
+                try:
+                    item['img'].convert('RGB').save(img_path, 'JPEG')
+                except Exception:
+                    continue
+
             data_list.append({
                 'index': idx,
-                'image': item['img'],
+                'image_path': img_path,
                 'mask': item.get('mask'),
                 'question': item['question'],
                 'image_width': item['img'].width,
@@ -103,32 +124,31 @@ class RoboSpatialPointingDataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'image': item['image'],
+            'image_path': item['image_path'],
             'mask': item['mask'],
             'question': item['question'],
         }
 
-    def build_prompt(self, line):
-        """Build pointing prompt in Molmo style."""
+    def build_prompt(self, line, model_name=None):
+        """Build pointing prompt with model-specific format."""
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        image = line['image']
+        image_path = line['image_path']
         question = line['question']
 
-        # Convert to Molmo-style prompt for better pointing performance
-        molmo_prompt = convert_to_molmo_prompt(question)
+        prompt = convert_pointing_prompt(question, model_name)
 
         msgs = [
-            dict(type='image', value=image),
-            dict(type='text', value=molmo_prompt),
+            dict(type='image', value=image_path),
+            dict(type='text', value=prompt),
         ]
         return msgs
 
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['image']
+        return line['image_path']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate pointing predictions.
@@ -214,6 +234,9 @@ class RoboSpatialVQADataset(ImageBaseDataset):
     def __init__(self, dataset='RoboSpatial_VQA', **kwargs):
         self.dataset_name = dataset
         self.splits = ['configuration', 'compatibility']
+        # Directory to save images
+        self.img_root = os.path.join(EMBODIED_DATA_ROOT, 'robospatial', 'vqa_images')
+        os.makedirs(self.img_root, exist_ok=True)
         self._load_hf_dataset()
 
     def _load_hf_dataset(self):
@@ -239,9 +262,17 @@ class RoboSpatialVQADataset(ImageBaseDataset):
 
         data_list = []
         for idx, item in enumerate(hf_dataset):
+            # Save image to disk
+            img_path = os.path.join(self.img_root, f'{idx:06d}.jpg')
+            if not os.path.exists(img_path):
+                try:
+                    item['img'].convert('RGB').save(img_path, 'JPEG')
+                except Exception:
+                    continue
+
             data_list.append({
                 'index': idx,
-                'image': item['img'],
+                'image_path': img_path,
                 'question': item['question'],
                 'answer': item['answer'],
             })
@@ -255,7 +286,7 @@ class RoboSpatialVQADataset(ImageBaseDataset):
         item = self.data.iloc[idx]
         return {
             'index': item['index'],
-            'image': item['image'],
+            'image_path': item['image_path'],
             'question': item['question'],
             'answer': item['answer'],
         }
@@ -265,11 +296,11 @@ class RoboSpatialVQADataset(ImageBaseDataset):
         if isinstance(line, int):
             line = self.data.iloc[line]
 
-        image = line['image']
+        image_path = line['image_path']
         question = line['question']
 
         msgs = [
-            dict(type='image', value=image),
+            dict(type='image', value=image_path),
             dict(type='text', value=question),
         ]
         return msgs
@@ -277,7 +308,7 @@ class RoboSpatialVQADataset(ImageBaseDataset):
     def dump_image(self, line):
         if isinstance(line, int):
             line = self.data.iloc[line]
-        return line['image']
+        return line['image_path']
 
     def evaluate(self, eval_file, **judge_kwargs):
         """Evaluate VQA predictions.
