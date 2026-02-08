@@ -43,8 +43,12 @@ def convert_pointing_prompt(original_question: str, model_name: str = None) -> s
 
     if model_type == 'molmo':
         return cleaned + " Point to the areas that the prompt asked."
-    elif model_type == 'qwen':
+    elif model_type == 'qwen3':
+        return cleaned + '\nLocate the relevant areas with points and report their point coordinates in JSON format like this: {"point_2d": [x, y], "label": "object/region"}'
+    elif model_type == 'qwen25':
         return cleaned + "\nOutput the coordinates in XML format <points x y>object</points>."
+    elif model_type == 'internvl':
+        return cleaned + " Point to the areas that the prompt asked."
     else:
         # llava, internvl, phi4
         return (
@@ -137,7 +141,26 @@ class RoboSpatialPointingDataset(ImageBaseDataset):
         image_path = line['image_path']
         question = line['question']
 
-        prompt = convert_pointing_prompt(question, model_name)
+        model_type = get_model_type(model_name)
+        if model_type == 'llava':
+            # PointArena official prompt for LLaVA-OneVision
+            cleaned = re.sub(
+                r'\s*Your answer should be formatted as a list of tuples.*$',
+                '', question, flags=re.IGNORECASE | re.DOTALL
+            ).strip()
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(image_path)
+                img_width, img_height = img.size
+            except Exception:
+                img_width, img_height = 0, 0
+            prompt = (
+                f"{cleaned} The image dimensions are width={img_width}px, height={img_height}px.\n"
+                "Give EXACT PIXEL COORDINATES in [x, y] format, where x is horizontal (left-to-right) "
+                "and y is vertical (top-to-bottom). ONLY return the coordinates with no additional text or explanations."
+            )
+        else:
+            prompt = convert_pointing_prompt(question, model_name)
 
         msgs = [
             dict(type='image', value=image_path),

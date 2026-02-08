@@ -111,7 +111,22 @@ class RefSpatialBenchDataset(ImageBaseDataset):
         image_path = line['image_path']
         obj = line['object']
 
-        prompt = format_pointing_prompt(f"the {obj}", model_name)
+        model_type = get_model_type(model_name)
+        if model_type == 'llava':
+            # PointArena official prompt for LLaVA-OneVision
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(image_path)
+                img_width, img_height = img.size
+            except Exception:
+                img_width, img_height = 0, 0
+            prompt = (
+                f"the {obj}. The image dimensions are width={img_width}px, height={img_height}px.\n"
+                "Give EXACT PIXEL COORDINATES in [x, y] format, where x is horizontal (left-to-right) "
+                "and y is vertical (top-to-bottom). ONLY return the coordinates with no additional text or explanations."
+            )
+        else:
+            prompt = format_pointing_prompt(f"the {obj}", model_name)
 
         msgs = [
             dict(type='image', value=image_path),
@@ -161,6 +176,8 @@ class RefSpatialBenchDataset(ImageBaseDataset):
 
             # Extract points from prediction
             points = extract_molmo_points(pred_text)
+            if not points:
+                points = extract_points_robust(pred_text, img_width, img_height)
 
             is_hit = False
             pred_point = None

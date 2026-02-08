@@ -14,7 +14,7 @@ import pandas as pd
 from PIL import Image
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import text2pts_official, calculate_accuracy_official, get_model_type
+from .utils import text2pts_official, calculate_accuracy_official, get_model_type, extract_points_robust
 from . import EMBODIED_DATA_ROOT
 
 
@@ -128,10 +128,27 @@ class Where2PlaceDataset(ImageBaseDataset):
 
         if model_type == 'molmo':
             prompt_text = question
-        elif model_type == 'qwen':
+        elif model_type == 'qwen3':
+            prompt_text = question + '\nLocate the placement position with a point and report its point coordinates in JSON format like this: {"point_2d": [x, y], "label": "object/region"}'
+        elif model_type == 'qwen25':
             prompt_text = question + "\nOutput the coordinates in XML format <points x y>object</points>."
+        elif model_type == 'internvl':
+            prompt_text = question
+        elif model_type == 'llava':
+            # PointArena official prompt for LLaVA-OneVision
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(image_path)
+                img_width, img_height = img.size
+            except Exception:
+                img_width, img_height = 0, 0
+            prompt_text = (
+                f"{question} The image dimensions are width={img_width}px, height={img_height}px.\n"
+                "Give EXACT PIXEL COORDINATES in [x, y] format, where x is horizontal (left-to-right) "
+                "and y is vertical (top-to-bottom). ONLY return the coordinates with no additional text or explanations."
+            )
         else:
-            # llava, internvl, phi4
+            # phi4, etc.
             prompt_text = (
                 question + "\nGive EXACT PIXEL COORDINATES in [x, y] format, "
                 "where x is horizontal and y is vertical. "
@@ -180,8 +197,13 @@ class Where2PlaceDataset(ImageBaseDataset):
                 scores.append(0.0)
                 continue
 
-            # Parse points/bbox from prediction
-            points = text2pts_official(pred_text, img_width, img_height)
+            # Parse points from prediction using robust extractor, fallback to text2pts for bbox
+            robust_pts = extract_points_robust(pred_text, img_width, img_height)
+            if robust_pts:
+                # Convert from 0-100 percentage to pixel coordinates
+                points = np.array([[int(x / 100.0 * img_width), int(y / 100.0 * img_height)] for x, y in robust_pts])
+            else:
+                points = text2pts_official(pred_text, img_width, img_height)
 
             # Calculate pixel precision
             acc = calculate_accuracy_official(points, mask)

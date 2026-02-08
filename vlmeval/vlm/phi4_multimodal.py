@@ -17,17 +17,32 @@ class Phi4Multimodal(BaseModel):
             logging.critical('Please install the latest version transformers.')
             raise e
 
-        # Try flash_attention_2 first, fall back to sdpa if not available
+        # Monkey-patch peft to fix compatibility with Phi4's internal LoRA
+        # Phi4 calls get_peft_model on its inner model which lacks prepare_inputs_for_generation
+        import peft.peft_model as _peft_module
+        _orig_causal_init = _peft_module.PeftModelForCausalLM.__init__
+
+        def _patched_causal_init(self_peft, model, peft_config, adapter_name='default', **kw):
+            if not hasattr(model, 'prepare_inputs_for_generation'):
+                model.prepare_inputs_for_generation = lambda *a, **k: None
+            _orig_causal_init(self_peft, model, peft_config, adapter_name, **kw)
+
+        _peft_module.PeftModelForCausalLM.__init__ = _patched_causal_init
+
+        # Try flash_attention_2 first, fall back to eager if not available
         try:
             model = AutoModelForCausalLM.from_pretrained(
                 model_path, device_map='cuda', trust_remote_code=True,
                 torch_dtype='auto', attn_implementation='flash_attention_2'
             ).eval()
-        except ImportError:
-            logging.warning("flash_attn not installed, falling back to sdpa attention")
+        except (ImportError, Exception) as e:
+            logging.warning(f"flash_attn not available ({e}), falling back to eager attention")
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            config._attn_implementation = 'eager'
             model = AutoModelForCausalLM.from_pretrained(
-                model_path, device_map='cuda', trust_remote_code=True,
-                torch_dtype='auto', attn_implementation='sdpa'
+                model_path, config=config, device_map='cuda', trust_remote_code=True,
+                torch_dtype='auto', attn_implementation='eager'
             ).eval()
         processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         generation_config = GenerationConfig.from_pretrained(model_path)

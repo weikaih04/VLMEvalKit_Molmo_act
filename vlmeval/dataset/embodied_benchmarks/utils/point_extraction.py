@@ -16,15 +16,17 @@ from typing import List, Tuple, Optional, Union
 def get_model_type(model_name: str) -> str:
     """Map model name to model type for prompt/parsing selection.
 
-    Returns one of: 'molmo', 'qwen', 'llava', 'internvl', 'phi4'
+    Returns one of: 'molmo', 'qwen25', 'qwen3', 'llava', 'internvl', 'phi4'
     """
     if model_name is None:
         return 'molmo'
     name = model_name.lower()
     if 'molmo' in name:
         return 'molmo'
+    elif 'qwen3' in name:
+        return 'qwen3'
     elif 'qwen' in name:
-        return 'qwen'
+        return 'qwen25'
     elif 'llava' in name:
         return 'llava'
     elif 'internvl' in name or 'intern_vl' in name:
@@ -48,13 +50,20 @@ def format_pointing_prompt(description: str, model_name: str = None) -> str:
 
     if model_type == 'molmo':
         return f"Point to {description}."
-    elif model_type == 'qwen':
+    elif model_type == 'qwen3':
+        return (
+            f"Locate {description} with a point and report its point coordinates in JSON format "
+            'like this: {"point_2d": [x, y], "label": "object/region"}'
+        )
+    elif model_type == 'qwen25':
         return (
             f"{description}\n"
             "Output its coordinates in XML format <points x y>object</points>."
         )
+    elif model_type == 'internvl':
+        return f"Point to {description}."
     else:
-        # llava, internvl, phi4 - use pixel coordinate format
+        # llava, phi4, etc.
         return (
             f"{description}\n"
             "Give EXACT PIXEL COORDINATES in [x, y] format, "
@@ -140,30 +149,36 @@ def extract_qwen_xml_points(text: str, img_width: int = 0, img_height: int = 0) 
     Extract points from Qwen2.5-VL/Qwen3-VL XML format.
 
     Qwen outputs: <points x1="450" y1="320">object</points>
+    or multi-point: <points x1="309" y1="242" x2="450" y2="252" x3="605" y3="292">
     or: <points 450 320>object</points>
 
-    Coordinates are in pixel space. Converted to 0-100 scale using image dimensions.
-    If image dimensions are not provided, auto-scales based on magnitude.
+    Coordinates may be in 0-1000 scale (Qwen3-VL) or pixel space (Qwen2.5-VL).
+    Converted to 0-100 scale using image dimensions if available.
 
     Returns points in 0-100 scale (percentage).
     """
     points = []
 
-    # Pattern 1: <points x1="450" y1="320">
-    pattern_attr = r'<points\s+x1?=["\']?(\d+\.?\d*)["\']?\s+y1?=["\']?(\d+\.?\d*)["\']?'
-    for match in re.finditer(pattern_attr, text):
-        try:
-            x = float(match.group(1))
-            y = float(match.group(2))
-            if img_width > 0 and img_height > 0:
-                x = (x / img_width) * 100.0
-                y = (y / img_height) * 100.0
-            elif x > 100.0 or y > 100.0:
-                x = x / 10.0
-                y = y / 10.0
-            points.append((x, y))
-        except (ValueError, IndexError):
-            continue
+    def _scale(x, y):
+        if img_width > 0 and img_height > 0:
+            return (x / img_width) * 100.0, (y / img_height) * 100.0
+        elif x > 100.0 or y > 100.0:
+            return x / 10.0, y / 10.0
+        return x, y
+
+    # Pattern 1: Find <points ...> tags and extract all xN="V" yN="V" pairs
+    tag_pattern = r'<points\s+([^>]+)>'
+    for tag_match in re.finditer(tag_pattern, text):
+        attrs = tag_match.group(1)
+        # Extract all xN="V" yN="V" pairs from attributes
+        xy_pattern = r'x\d*=["\']?(\d+\.?\d*)["\']?\s+y\d*=["\']?(\d+\.?\d*)["\']?'
+        for match in re.finditer(xy_pattern, attrs):
+            try:
+                x, y = float(match.group(1)), float(match.group(2))
+                x, y = _scale(x, y)
+                points.append((x, y))
+            except (ValueError, IndexError):
+                continue
 
     if points:
         return points
@@ -172,14 +187,67 @@ def extract_qwen_xml_points(text: str, img_width: int = 0, img_height: int = 0) 
     pattern_direct = r'<points\s+(\d+\.?\d*)\s+(\d+\.?\d*)>.*?</points>'
     for match in re.finditer(pattern_direct, text):
         try:
-            x = float(match.group(1))
-            y = float(match.group(2))
-            if img_width > 0 and img_height > 0:
-                x = (x / img_width) * 100.0
-                y = (y / img_height) * 100.0
-            elif x > 100.0 or y > 100.0:
-                x = x / 10.0
-                y = y / 10.0
+            x, y = float(match.group(1)), float(match.group(2))
+            x, y = _scale(x, y)
+            points.append((x, y))
+        except (ValueError, IndexError):
+            continue
+
+    return points
+
+
+def extract_json_point2d(text: str) -> List[Tuple[float, float]]:
+    """
+    Extract points from Qwen3-VL JSON point_2d format.
+
+    Qwen3-VL outputs: {"point_2d": [x, y], "label": "object"}
+    or a JSON array: [{"point_2d": [x, y], "label": "object"}, ...]
+
+    Coordinates are in 0-1000 scale. Converted to 0-100 scale.
+
+    Returns points in 0-100 scale (percentage).
+    """
+    import json
+
+    points = []
+
+    # Try to parse as JSON (possibly wrapped in markdown code fence)
+    clean = text.strip()
+    if clean.startswith('```json'):
+        clean = clean[7:]
+    if clean.startswith('```'):
+        clean = clean[3:]
+    if clean.endswith('```'):
+        clean = clean[:-3]
+    clean = clean.strip()
+
+    try:
+        data = json.loads(clean)
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and 'point_2d' in item:
+                    coords = item['point_2d']
+                    if isinstance(coords, (list, tuple)) and len(coords) == 2:
+                        x, y = float(coords[0]), float(coords[1])
+                        # Qwen3-VL uses 0-1000 scale
+                        if x > 100 or y > 100:
+                            x, y = x / 10.0, y / 10.0
+                        points.append((x, y))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+
+    if points:
+        return points
+
+    # Fallback: regex for point_2d pattern in text
+    pattern = r'"point_2d"\s*:\s*\[\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*\]'
+    for match in re.finditer(pattern, text):
+        try:
+            x, y = float(match.group(1)), float(match.group(2))
+            if x > 100 or y > 100:
+                x, y = x / 10.0, y / 10.0
             points.append((x, y))
         except (ValueError, IndexError):
             continue
@@ -384,27 +452,32 @@ def extract_points_robust(text: str, img_width: int = 0, img_height: int = 0) ->
     if points:
         return points
 
-    # Strategy C: Try Qwen XML format
+    # Strategy C: Try Qwen3-VL JSON point_2d format
+    points = extract_json_point2d(text)
+    if points:
+        return points
+
+    # Strategy D: Try Qwen XML format
     points = extract_qwen_xml_points(text, img_width, img_height)
     if points:
         return points
 
-    # Strategy D: Try bracket format [x, y]
+    # Strategy E: Try bracket format [x, y]
     points = extract_bracket_points(text, img_width, img_height)
     if points:
         return points
 
-    # Strategy E: Try Click format
+    # Strategy F: Try Click format
     points = extract_click_format_points(text)
     if points:
         return points
 
-    # Strategy F: Try xy attribute format
+    # Strategy G: Try xy attribute format
     points = extract_xy_attribute_points(text)
     if points:
         return points
 
-    # Strategy G: Try Python tuple format
+    # Strategy H: Try Python tuple format
     points = extract_python_tuple_points(text)
     if points:
         return points

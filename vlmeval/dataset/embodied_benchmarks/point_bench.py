@@ -164,10 +164,27 @@ class PointBenchDataset(ImageBaseDataset):
 
         if model_type == 'molmo':
             prompt_text = f"{question}\nPoint to the relevant location(s)."
-        elif model_type == 'qwen':
+        elif model_type == 'qwen3':
+            prompt_text = f'{question}\nLocate the relevant location(s) with points and report their point coordinates in JSON format like this: {{"point_2d": [x, y], "label": "object/region"}}'
+        elif model_type == 'qwen25':
             prompt_text = f"{question}\nOutput the coordinates in XML format <points x y>object</points>."
+        elif model_type == 'internvl':
+            prompt_text = f"{question}\nPoint to the relevant location(s)."
+        elif model_type == 'llava':
+            # PointArena official prompt for LLaVA-OneVision
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(image_path)
+                img_width, img_height = img.size
+            except Exception:
+                img_width, img_height = 0, 0
+            prompt_text = (
+                f"{question} The image dimensions are width={img_width}px, height={img_height}px.\n"
+                "Give EXACT PIXEL COORDINATES in [x, y] format, where x is horizontal (left-to-right) "
+                "and y is vertical (top-to-bottom). ONLY return the coordinates with no additional text or explanations."
+            )
         else:
-            # llava, internvl, phi4
+            # phi4, etc.
             prompt_text = (
                 f"{question}\n"
                 "Give EXACT PIXEL COORDINATES in [x, y] format, "

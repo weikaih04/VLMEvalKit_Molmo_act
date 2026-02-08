@@ -24,7 +24,7 @@ from . import EMBODIED_DATA_ROOT
 
 def get_frames_from_folder(folder_path, num_frames=8):
     """Load frames from a folder of images."""
-    if not os.path.exists(folder_path):
+    if not folder_path or not os.path.exists(folder_path):
         return []
 
     # Find all images
@@ -48,6 +48,39 @@ def get_frames_from_folder(folder_path, num_frames=8):
             pass
 
     return frames
+
+
+def extract_frames_from_video(video_path, num_frames=8, output_dir=None):
+    """Extract frames from a video file and save as JPEG files.
+
+    Returns list of file paths to extracted frames.
+    """
+    from decord import VideoReader, cpu
+
+    if not video_path or not os.path.exists(video_path):
+        return []
+
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(video_path), '_frames_cache',
+                                  os.path.splitext(os.path.basename(video_path))[0])
+    os.makedirs(output_dir, exist_ok=True)
+
+    try:
+        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        total = len(vr)
+        indices = np.linspace(0, total - 1, num_frames, dtype=int)
+
+        frame_paths = []
+        for i, idx in enumerate(indices):
+            pth = os.path.join(output_dir, f'{i:05d}.jpg')
+            if not os.path.exists(pth):
+                frame = Image.fromarray(vr[idx].asnumpy())
+                frame.save(pth)
+            frame_paths.append(pth)
+        return frame_paths
+    except Exception as e:
+        print(f"Warning: Failed to extract frames from {video_path}: {e}")
+        return []
 
 
 class OpenEQADataset(VideoBaseDataset):
@@ -161,10 +194,18 @@ class OpenEQADataset(VideoBaseDataset):
         if video_llm and video_path and os.path.exists(video_path):
             msgs.append(dict(type='video', value=video_path))
         else:
-            # Fallback to multi-image mode
+            # Fallback to multi-image mode: try frames folder first, then extract from video
             frames = get_frames_from_folder(frames_path, self.num_frames)
-            for frame in frames:
-                msgs.append(dict(type='image', value=frame))
+            if frames:
+                for frame in frames:
+                    msgs.append(dict(type='image', value=frame))
+            elif video_path and os.path.exists(video_path):
+                # No frames folder - extract frames from video file as JPEG paths
+                frame_paths = extract_frames_from_video(video_path, self.num_frames)
+                for fp in frame_paths:
+                    msgs.append(dict(type='image', value=fp))
+            else:
+                print(f"Warning: No frames or video found for {line.get('episode_history', 'unknown')}")
 
         msgs.append(dict(type='text', value=question))
 

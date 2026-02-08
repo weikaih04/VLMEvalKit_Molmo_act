@@ -1,9 +1,10 @@
 """
-Full evaluation script for all embodied benchmarks with Molmo2 + vLLM.
+Full evaluation script for embodied + general VLM benchmarks with Molmo2 + vLLM.
 
 Usage:
     python run_full_eval.py --model Molmo2-4B --output results/
     python run_full_eval.py --model Molmo2-4B --benchmarks CVBench_Embodied EmbSpatial_Embodied
+    python run_full_eval.py --model Molmo2-4B --benchmarks ChartQA_TEST TextVQA_VAL MMBench_V11
     python run_full_eval.py --model Molmo2-4B --batch_size 8 --output results/
 """
 
@@ -59,6 +60,19 @@ ALL_BENCHMARKS = [
     'ERQA_Embodied',
     'MMSI_Bench_Embodied',
     'PointBench_Embodied',  # Point-Bench multimodal pointing benchmark
+]
+
+# General VLM benchmarks (use native VLMEvalKit evaluation)
+GENERAL_BENCHMARKS = [
+    'ChartQA_TEST',
+    'TextVQA_VAL',
+    'DocVQA_VAL',
+    'MMBench_V11',
+    'MMMU_DEV_VAL',
+    'RealWorldQA',
+    'MVBench',
+    'MathVista_MINI',
+    'OCRBench',
 ]
 
 # VSIBench question type categories (from native VLMEvalKit)
@@ -117,7 +131,7 @@ def evaluate_pointing(pred: str, mask, width: int, height: int) -> bool:
     """Evaluate pointing task."""
     points = extract_molmo_points(pred)
     if not points:
-        points = extract_points_robust(pred)
+        points = extract_points_robust(pred, width, height)
 
     if not points or mask is None:
         return False
@@ -352,7 +366,17 @@ def run_benchmark(model, benchmark_name: str, output_dir: str = None, batch_size
             print(f"Warning: No valid samples to process for {benchmark_name}")
             return {'benchmark': benchmark_name, 'accuracy': 0.0, 'total': 0, 'correct': 0}
 
-        chunk_size = len(valid_prompts)  # Process all at once; vLLM handles batching internally
+        # Determine chunk size based on images per prompt to avoid OOM
+        # Multi-image prompts (video frames) need smaller chunks
+        if valid_prompts:
+            imgs_per_prompt = sum(1 for m in valid_prompts[0] if m.get('type') in ('image', 'video'))
+        else:
+            imgs_per_prompt = 1
+        if imgs_per_prompt > 1:
+            # Multi-image: use smaller chunks (e.g. 8 frames/prompt → ~16 prompts per chunk)
+            chunk_size = max(1, 128 // imgs_per_prompt)
+        else:
+            chunk_size = len(valid_prompts)  # Single-image: process all at once
 
         preds = []
         for chunk_start in tqdm(range(0, len(valid_prompts), chunk_size), desc="Inference chunks"):
@@ -520,6 +544,7 @@ def main():
         'molmo2-4-spatial-tuning-v1-4k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/mm_olmo/spatial_ckpt/molmo3-spatial/hf_checkpoint_4k'),
         'molmo2-4b-spatial-v3-2k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-2k'),
         'molmo2-4b-spatial-v3-7k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-7k'),
+        **{f'molmo2-4b-spatial-v4-{step}': ('molmo2', f'/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v4-{step}') for step in [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000]},
         # LLaVA-OneVision models (HuggingFace version)
         'LLaVA-OneVision-0.5B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-0.5b-ov-hf'),
         'LLaVA-OneVision-7B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-7b-ov-hf'),

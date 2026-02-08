@@ -1772,6 +1772,12 @@ molmo2_series = {
         model_path="/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-7k",
         max_new_tokens=512
     ),
+    # V4 spatial checkpoints (every 2k steps)
+    **{f"molmo2-4b-spatial-v4-{step}": partial(
+        Molmo2,
+        model_path=f"/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v4-{step}",
+        max_new_tokens=512
+    ) for step in [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000]},
 }
 
 kosmos_series = {
