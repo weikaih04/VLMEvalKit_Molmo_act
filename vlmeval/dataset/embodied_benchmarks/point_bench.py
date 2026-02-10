@@ -169,7 +169,7 @@ class PointBenchDataset(ImageBaseDataset):
         elif model_type == 'qwen25':
             prompt_text = f"{question}\nOutput the coordinates in XML format <points x y>object</points>."
         elif model_type == 'internvl':
-            prompt_text = f"{question}\nPoint to the relevant location(s)."
+            prompt_text = f"{question}\nPoint to the relevant location(s). Respond with ONLY the coordinates in [x, y] format."
         elif model_type == 'llava':
             # PointArena official prompt for LLaVA-OneVision
             try:

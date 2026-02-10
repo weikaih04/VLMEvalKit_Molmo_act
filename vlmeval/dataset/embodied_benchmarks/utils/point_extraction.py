@@ -61,7 +61,7 @@ def format_pointing_prompt(description: str, model_name: str = None) -> str:
             "Output its coordinates in XML format <points x y>object</points>."
         )
     elif model_type == 'internvl':
-        return f"Point to {description}."
+        return f"Point to {description}. Respond with ONLY the coordinates in [x, y] format."
     else:
         # llava, phi4, etc.
         return (

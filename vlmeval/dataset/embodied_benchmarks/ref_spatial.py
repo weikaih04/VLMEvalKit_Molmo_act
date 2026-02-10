@@ -15,7 +15,7 @@ from PIL import Image
 from datasets import load_dataset
 from ..image_base import ImageBaseDataset
 from ...smp import load, dump
-from .utils import extract_molmo_points, extract_points_robust, check_point_in_mask, format_pointing_prompt
+from .utils import extract_molmo_points, extract_points_robust, check_point_in_mask, format_pointing_prompt, get_model_type
 from . import EMBODIED_DATA_ROOT
 
 

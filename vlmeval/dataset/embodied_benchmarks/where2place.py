@@ -133,7 +133,7 @@ class Where2PlaceDataset(ImageBaseDataset):
         elif model_type == 'qwen25':
             prompt_text = question + "\nOutput the coordinates in XML format <points x y>object</points>."
         elif model_type == 'internvl':
-            prompt_text = question
+            prompt_text = question + "\nRespond with ONLY the coordinates in [x, y] format."
         elif model_type == 'llava':
             # PointArena official prompt for LLaVA-OneVision
             try:

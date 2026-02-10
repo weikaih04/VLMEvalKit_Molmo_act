@@ -545,6 +545,7 @@ def main():
         'molmo2-4b-spatial-v3-2k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-2k'),
         'molmo2-4b-spatial-v3-7k': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v3-7k'),
         **{f'molmo2-4b-spatial-v4-{step}': ('molmo2', f'/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-v4-{step}') for step in [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000]},
+        'molmo2-4b-spatial-mix50-step1500': ('molmo2', '/weka/oe-training-default/jieyuz2/improve_segments/molmo_training/converted_models/molmo2-4b-spatial-mix50-step1500'),
         # LLaVA-OneVision models (HuggingFace version)
         'LLaVA-OneVision-0.5B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-0.5b-ov-hf'),
         'LLaVA-OneVision-7B': ('llava-onevision', 'llava-hf/llava-onevision-qwen2-7b-ov-hf'),

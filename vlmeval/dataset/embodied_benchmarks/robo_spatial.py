@@ -48,7 +48,7 @@ def convert_pointing_prompt(original_question: str, model_name: str = None) -> s
     elif model_type == 'qwen25':
         return cleaned + "\nOutput the coordinates in XML format <points x y>object</points>."
     elif model_type == 'internvl':
-        return cleaned + " Point to the areas that the prompt asked."
+        return cleaned + " Point to the areas that the prompt asked. Respond with ONLY the coordinates in [x, y] format."
     else:
         # llava, internvl, phi4
         return (
